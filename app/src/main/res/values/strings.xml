@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">车牌识别</string>
+    <string name="capture">抓拍并识别</string>
+    <string name="pick_image">从相册选择</string>
+    <string name="export_csv">导出 CSV</string>
+    <string name="records">识别记录</string>
+    <string name="correct">修正</string>
+    <string name="delete">删除</string>
+    <string name="ok">确定</string>
+    <string name="cancel">取消</string>
+    <string name="permission_required">需要相机权限才能拍摄车牌</string>
+    <string name="grant_permission">授予权限</string>
+    <string name="recognizing">正在识别…</string>
+    <string name="no_plate_detected">未检测到车牌，请手动输入</string>
+    <string name="enter_plate">请输入车牌号</string>
+    <string name="invalid_plate_format">格式不符合中国车牌规则</string>
+    <string name="exported_records">已导出 %1$d 条记录到 Download/%2$s</string>
+</resources>

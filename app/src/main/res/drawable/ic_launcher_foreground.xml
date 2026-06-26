@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- 简单的「车牌」图标占位：白色矩形 + 文字「车」 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M22,38 L86,38 L86,70 L22,70 Z" />
+    <path
+        android:fillColor="#1976D2"
+        android:pathData="M40,46 L68,46 L68,62 L40,62 Z" />
+</vector>
