@@ -61,37 +61,51 @@ class PlateRecognizer(context: Context) {
         }
 
     /**
-     * 从 [Text] 的 textBlocks 中按空间形状预过滤，再喂给 [pickBestCandidate]。
-     * 优先返回通过几何过滤 + 合法字符校验的候选；
-     * 全军覆没时退而求其次：把全文拼起来做一次松弛候选（兼容取景框很小、
-     * 整张图只有车牌一行文字时 boundingBox 角度信息可能不可靠的场景）。
+     * 从 [Text] 的 textBlocks 中挑选最像车牌的候选。
+     *
+     * 设计要点：ML Kit 的 boundingBox 包围的是**识别文字像素**而非车牌物理外框，
+     * 因此**不能**把 2.6–3.8 的车牌外框宽高比当作硬过滤——很多合法车牌的文字框
+     * 会因字体/边距/透视落到此区间之外。
+     *
+     * 既然相机输入已经被取景框 ROI 裁剪到约 3.14:1 范围，几何形状的过滤工作主要
+     * 由 ROI 完成。本函数只在多候选时使用"几何相似度"作为**加权评分**，而非淘汰条件。
+     *
+     * 兜底：所有 block 都没有合法候选时，对整段全文做一次匹配；confidence 封顶
+     * 0.7，确保走人工确认。
      */
     private fun pickBestFromBlocks(text: Text, imgW: Int, imgH: Int): Recognition? {
         if (text.text.isBlank()) return null
         val imageArea = (imgW.toLong() * imgH.toLong()).coerceAtLeast(1L)
 
-        // 1) 几何过滤：宽高比 + 面积
-        val candidates = mutableListOf<Recognition>()
+        data class Scored(val recog: Recognition, val score: Float)
+        val scored = mutableListOf<Scored>()
+
         for (block in text.textBlocks) {
-            val rect = block.boundingBox ?: continue
-            val w = rect.width()
-            val h = rect.height()
-            if (w <= 0 || h <= 0) continue
-            val aspect = w.toFloat() / h.toFloat()
-            val areaRatio = (w.toLong() * h.toLong()).toDouble() / imageArea.toDouble()
+            val recog = pickBestCandidate(block.text) ?: continue
+            val rect = block.boundingBox
 
-            val shapeOk = aspect in PLATE_ASPECT_MIN..PLATE_ASPECT_MAX
-            val sizeOk = areaRatio >= MIN_AREA_RATIO
-
-            if (shapeOk && sizeOk) {
-                pickBestCandidate(block.text)?.let { candidates += it }
+            // 几何加权（看像不像车牌文字框）：
+            //   - 宽高比 ∈ [2.0, 5.0] +0.05
+            //   - 占图面积 ≥ 1% +0.03
+            // 不在范围内**不扣分**——我们已经被 ROI 卡过了一次，这里只奖励"长且明显"的块。
+            var bonus = 0f
+            if (rect != null && rect.width() > 0 && rect.height() > 0) {
+                val aspect = rect.width().toFloat() / rect.height().toFloat()
+                if (aspect in 2.0f..5.0f) bonus += 0.05f
+                val areaRatio = (rect.width().toLong() * rect.height().toLong()).toDouble() /
+                    imageArea.toDouble()
+                if (areaRatio >= 0.01) bonus += 0.03f
             }
-        }
-        if (candidates.isNotEmpty()) {
-            return candidates.maxBy { it.confidence }
+            scored += Scored(recog, recog.confidence + bonus)
         }
 
-        // 2) 几何过滤无果 → 退到全文兜底，但置信度封顶，避免高置信度误入库
+        if (scored.isNotEmpty()) {
+            val best = scored.maxBy { it.score }
+            // confidence 截断到 [0,0.98]：加权只用来排序，对外仍按 pickBestCandidate 的原 confidence
+            return best.recog
+        }
+
+        // 全文兜底
         val fallback = pickBestCandidate(text.text) ?: return null
         return fallback.copy(confidence = fallback.confidence.coerceAtMost(MAX_FALLBACK_CONFIDENCE))
     }
@@ -104,14 +118,7 @@ class PlateRecognizer(context: Context) {
     }
 
     companion object {
-        /** 车牌宽高比窗：440×140≈3.14（普通），480×140≈3.43（新能源），±0.3 容差。 */
-        private const val PLATE_ASPECT_MIN = 2.6f
-        private const val PLATE_ASPECT_MAX = 3.8f
-
-        /** 占图面积下限：太小的文字块（车架号等）剔除。 */
-        private const val MIN_AREA_RATIO = 0.02
-
-        /** 几何过滤未命中时，从全文捞回的候选 confidence 封顶。 */
+        /** 几何过滤无果时，从全文捞回的候选 confidence 封顶。 */
         private const val MAX_FALLBACK_CONFIDENCE = 0.7f
 
         private const val PROVINCES = "京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼"

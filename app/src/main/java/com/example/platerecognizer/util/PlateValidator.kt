@@ -153,8 +153,12 @@ object PlateValidator {
             return null
         }
 
-        // 普通 7 位：5 位序号，按表 4 至少应 (a) 全数字 (b) 1 位字母 (c) 2 位字母混合
-        // 这里不再细分启用顺序，只要序号字符集合法即放行（标准里已经穷举到 16 种组合）
+        // 普通 7 位（标准 5.9 表 4 / 表 3）：5 位序号最多 2 位字母。
+        // 全数字 / 1 位字母 + 4 位数字 / 2 位字母 + 3 位数字 都允许；3 位及以上字母不允许。
+        val letterCount = serial.count { it.isLetter() }
+        if (letterCount > 2) {
+            return "普通号牌序号最多包含 2 位字母（GA 36-2018 表 4）"
+        }
         return null
     }
 }

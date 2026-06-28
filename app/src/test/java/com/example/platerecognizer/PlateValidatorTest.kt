@@ -39,9 +39,25 @@ class PlateValidatorTest {
 
     @Test fun valid_with_letters_in_serial() {
         // 表 4 第 2/3 种启用规则：序号含 1 或 2 位字母
-        listOf("京A1B345", "粤B12C45", "沪AABC23").forEach {
+        // 京A1B345 = 序号 1B345（1 位字母 B）
+        // 粤B12C45 = 序号 12C45（1 位字母 C）
+        // 沪A AB345 = 序号 AB345（2 位字母 A B，其余数字）
+        listOf("京A1B345", "粤B12C45", "沪AAB345").forEach {
             assertTrue("应合法: $it", PlateValidator.isValid(it))
         }
+    }
+
+    @Test fun rejects_more_than_two_letters_in_normal_serial() {
+        // 标准 5.9 表 4：普通号牌 5 位序号最多 2 位字母
+        // 京AAAAAA = 省份 京 + 发牌代号 A + 5 位序号 AAAAA（5 字母）
+        // 沪AABC23 = 序号 ABC23（3 字母）
+        // 粤BABCD1 = 序号 ABCD1（4 字母）
+        listOf("京AAAAAA", "沪AABC23", "粤BABCD1").forEach {
+            assertFalse("应拒绝（超过 2 位字母）: $it", PlateValidator.isValid(it))
+        }
+        val err = PlateValidator.describeError("京AAAAAA")
+        assertNotNull(err)
+        assertTrue("错误信息应提及字母位数: $err", err!!.contains("字母"))
     }
 
     // ===== 新能源（8 位） =====
