@@ -1,2 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<full-backup-content />
+<!--
+  备份规则（Android 11 及更早版本走这份文件）。
+
+  车牌数据（plates.db + 抓拍/导入图片）包含用户私人信息，不进入 Google Drive 云备份。
+  其他 app 设置仍允许默认备份。
+-->
+<full-backup-content>
+    <exclude domain="database" path="plates.db" />
+    <exclude domain="database" path="plates.db-shm" />
+    <exclude domain="database" path="plates.db-wal" />
+    <exclude domain="file" path="plates/" />
+</full-backup-content>

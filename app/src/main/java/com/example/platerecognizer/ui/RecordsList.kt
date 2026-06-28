@@ -61,6 +61,8 @@ private fun RecordCard(
     onEdit: (PlateRecord) -> Unit,
     onDelete: (PlateRecord) -> Unit,
 ) {
+    // 直接用 inline lambda：r 内容可能变化（修正后），缓存反而会捕获旧 r。
+    // Compose 重组时这点 lambda 分配开销可忽略，正确性优先。
     Card(
         modifier = Modifier.fillMaxWidth(),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),

@@ -1,7 +1,8 @@
 package com.example.platerecognizer.ui
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
@@ -41,7 +42,7 @@ fun PlateInputDialog(
         title = { Text(title) },
         text = {
             Box(Modifier.fillMaxWidth()) {
-                androidx.compose.foundation.layout.Column {
+                Column {
                     OutlinedTextField(
                         value = plate,
                         onValueChange = { plate = it.uppercase() },
@@ -53,7 +54,7 @@ fun PlateInputDialog(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    androidx.compose.foundation.layout.Spacer(Modifier.padding(4.dp))
+                    Spacer(Modifier.padding(4.dp))
                     OutlinedTextField(
                         value = note,
                         onValueChange = { note = it },
