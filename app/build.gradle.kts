@@ -2,6 +2,8 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    // parcelize 与 kotlin-android 同源，复用 Kotlin Gradle Plugin 的 classpath
+    id("kotlin-parcelize")
     alias(libs.plugins.ksp)
 }
 

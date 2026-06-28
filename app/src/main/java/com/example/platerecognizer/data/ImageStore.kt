@@ -36,4 +36,22 @@ class ImageStore(context: Context) {
         } ?: error("无法读取所选图片")
         target.toUri()
     }
+
+    /**
+     * 删除一个 app 自有图片（仅 file:// 协议且位于 filesDir/plates 之下）。
+     * 用 canonical path + File.separator 拼接判断包含关系，
+     * 避免 ".." / 符号链接绕过；同时防 "/foo" 误判前缀 "/foobar"。
+     * 任何不属于私有目录的 URI 静默忽略，绝不误删相册原图或 SAF 来源。
+     */
+    suspend fun deleteOwned(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            if (uri.scheme != "file") return@runCatching false
+            val path = uri.path ?: return@runCatching false
+            val target = File(path).canonicalFile
+            val ownedRoot = dir.canonicalFile.absolutePath + File.separator
+            if (!target.absolutePath.startsWith(ownedRoot)) return@runCatching false
+            if (!target.isFile) return@runCatching false
+            target.delete()
+        }.getOrDefault(false)
+    }
 }
