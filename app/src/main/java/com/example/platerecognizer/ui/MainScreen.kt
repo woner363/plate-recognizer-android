@@ -1,6 +1,9 @@
 package com.example.platerecognizer.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -8,6 +11,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,16 +36,19 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -50,49 +57,49 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.platerecognizer.camera.PhotoCapturer
 import com.example.platerecognizer.data.PlateRecord
-import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(vm: PlatesViewModel = viewModel()) {
+fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory)) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val scope = rememberCoroutineScope()
 
     val records by vm.records.collectAsState()
     val isProcessing by vm.isProcessing.collectAsState()
-    val event by vm.events.collectAsState()
 
     // 维持单一 ImageCapture 用例引用，供拍照按钮使用
     val imageCapture = remember { ImageCapture.Builder().build() }
     val capturer = remember(imageCapture) { PhotoCapturer(context, imageCapture) }
 
-    // 相册选择器
+    // 相册选择器（PickVisualMedia 比 GetContent 更现代，且不需要存储权限）
     val pickImage = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri: Uri? -> uri?.let(vm::onImageCaptured) }
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? -> uri?.let(vm::onImagePicked) }
+
+    // 导出 CSV 的权限闸门：Q+ 走 MediaStore 不需要权限；pre-Q 才请求 WRITE_EXTERNAL_STORAGE。
+    val exportLauncher = rememberExportLauncher(
+        onAuthorized = { vm.exportCsv() },
+        onDenied = {
+            android.widget.Toast.makeText(
+                context,
+                "缺少存储权限，无法导出",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        },
+    )
 
     // 对话框状态
     var editing by remember { mutableStateOf<PlateRecord?>(null) }
     var promptInfo by remember { mutableStateOf<UiEvent.RequestPlateInput?>(null) }
-    var toast by remember { mutableStateOf<String?>(null) }
 
-    // 监听一次性事件
-    LaunchedEffect(event) {
-        when (val e = event) {
-            is UiEvent.Toast -> {
-                toast = e.message
+    // 监听一次性事件（Channel → 不会丢、不会因相同值被去重）
+    LaunchedEffect(Unit) {
+        vm.events.collect { e ->
+            when (e) {
+                is UiEvent.Toast ->
+                    android.widget.Toast.makeText(context, e.message, android.widget.Toast.LENGTH_SHORT).show()
+                is UiEvent.RequestPlateInput -> promptInfo = e
             }
-            is UiEvent.RequestPlateInput -> promptInfo = e
-            null -> Unit
-        }
-        if (event != null) vm.consumeEvent()
-    }
-
-    LaunchedEffect(toast) {
-        toast?.let {
-            android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show()
-            toast = null
         }
     }
 
@@ -104,7 +111,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
         Column(
             Modifier.padding(padding).fillMaxSize(),
         ) {
-            // 摄像头预览
+            // 摄像头预览 + 车牌取景框
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -132,6 +139,8 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+                // 取景框遮罩——固定比例 [PLATE_ROI]，让用户对齐再拍
+                PlateViewfinder(modifier = Modifier.fillMaxSize())
                 if (isProcessing) {
                     Box(
                         Modifier.fillMaxSize(),
@@ -148,16 +157,8 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Button(
-                    onClick = {
-                        scope.launch {
-                            try {
-                                val uri = capturer.takePicture()
-                                vm.onImageCaptured(uri)
-                            } catch (e: Throwable) {
-                                toast = "抓拍失败: ${e.message}"
-                            }
-                        }
-                    },
+                    onClick = { vm.capturePhotoThenRecognize { capturer.takePicture(PLATE_ROI) } },
+                    enabled = !isProcessing,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(),
                 ) {
@@ -166,7 +167,14 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
                     Text("抓拍识别")
                 }
                 OutlinedButton(
-                    onClick = { pickImage.launch("image/*") },
+                    onClick = {
+                        pickImage.launch(
+                            androidx.activity.result.PickVisualMediaRequest(
+                                ActivityResultContracts.PickVisualMedia.ImageOnly,
+                            ),
+                        )
+                    },
+                    enabled = !isProcessing,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Default.PhotoLibrary, null)
@@ -174,7 +182,8 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
                     Text("从相册")
                 }
                 OutlinedButton(
-                    onClick = { vm.exportCsv() },
+                    onClick = { exportLauncher.launch() },
+                    enabled = !isProcessing,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(Icons.Default.SaveAlt, null)
@@ -218,22 +227,110 @@ fun MainScreen(vm: PlatesViewModel = viewModel()) {
             initial = info.initial,
             onDismiss = { promptInfo = null },
             onConfirm = { plate, note ->
-                vm.saveAfterPrompt(plate, info.confidence, info.imageUri)
-                if (!note.isNullOrBlank()) {
-                    // 备注通过随后的更正写入；这里简化处理：保存后立刻取最新记录并打上备注
-                    scope.launch {
-                        val latest = vm.records.value.firstOrNull()
-                        if (latest != null && latest.plateNo == plate) {
-                            vm.applyCorrection(latest, plate, note)
-                        }
-                    }
-                }
+                // note 一并传给 saveAfterPrompt，避免事后再 update 触发 corrected=true
+                vm.saveAfterPrompt(plate, info.confidence, info.imageUri, note)
                 promptInfo = null
             },
         )
     }
+}
 
-    DisposableEffect(Unit) {
-        onDispose { /* CameraX 由 lifecycleOwner 管理生命周期 */ }
+/**
+ * 取景框相对 PreviewView 的归一化区域。
+ *
+ * 取宽 80%、按 GA 36-2018 的 440×140 (3.143:1) 算高度，垂直居中。
+ * 这个比例同时兼容新能源 480×140 (3.43:1)，用户略微远拍即可对齐。
+ *
+ * PreviewView 自身是 4:3，所以 ROI 物理高度 = 0.80 * width / 3.143 / (4/3) * 1
+ * 简化后：高度归一化值 ≈ 0.191；y 从中央偏一点（约 0.4）开始。
+ */
+internal val PLATE_ROI: PhotoCapturer.PreviewRoi = PhotoCapturer.PreviewRoi(
+    x = 0.10f,
+    // PreviewView 高 = 容器宽 / (4/3) ；ROI 物理高 = 容器宽 * 0.80 / 3.143
+    // 故 ROI 占容器高度比例 = (0.80/3.143) / (1/(4/3)) = 0.80 * (4/3) / 3.143 ≈ 0.339
+    // 实际 ROI 高度归一化 = 物理 ROI 高 / PreviewView 高
+    // PreviewView 物理高 = 容器宽 * 3/4 ；ROI 物理高 = 容器宽 * 0.80/3.143
+    // ROI 归一化 h = (0.80/3.143) / (3/4) = 0.80 * 4 / (3.143 * 3) ≈ 0.339
+    y = 0.5f - 0.339f / 2f,
+    w = 0.80f,
+    h = 0.339f,
+)
+
+/** 在预览上画车牌取景框：半透明遮罩 + 实线边框 + 四角强调线 + 提示文字。 */
+@Composable
+private fun PlateViewfinder(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val full = Size(size.width, size.height)
+        val x = PLATE_ROI.x * full.width
+        val y = PLATE_ROI.y * full.height
+        val w = PLATE_ROI.w * full.width
+        val h = PLATE_ROI.h * full.height
+
+        // 1) 取景框外画 50% 黑色遮罩——用 4 个矩形把 ROI 之外涂掉
+        val mask = Color(0x88000000)
+        drawRect(mask, topLeft = Offset(0f, 0f), size = Size(full.width, y))                              // 顶
+        drawRect(mask, topLeft = Offset(0f, y + h), size = Size(full.width, full.height - y - h))         // 底
+        drawRect(mask, topLeft = Offset(0f, y), size = Size(x, h))                                        // 左
+        drawRect(mask, topLeft = Offset(x + w, y), size = Size(full.width - x - w, h))                    // 右
+
+        // 2) 实线边框
+        drawRect(
+            color = Color.White,
+            topLeft = Offset(x, y),
+            size = Size(w, h),
+            style = Stroke(width = 2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f))),
+        )
+
+        // 3) 四角强调线
+        val corner = w.coerceAtMost(h) * 0.12f
+        val cornerStroke = Stroke(width = 5f)
+        val accent = Color(0xFFFFD54F)
+        // 左上
+        drawLine(accent, Offset(x, y), Offset(x + corner, y), strokeWidth = cornerStroke.width)
+        drawLine(accent, Offset(x, y), Offset(x, y + corner), strokeWidth = cornerStroke.width)
+        // 右上
+        drawLine(accent, Offset(x + w, y), Offset(x + w - corner, y), strokeWidth = cornerStroke.width)
+        drawLine(accent, Offset(x + w, y), Offset(x + w, y + corner), strokeWidth = cornerStroke.width)
+        // 左下
+        drawLine(accent, Offset(x, y + h), Offset(x + corner, y + h), strokeWidth = cornerStroke.width)
+        drawLine(accent, Offset(x, y + h), Offset(x, y + h - corner), strokeWidth = cornerStroke.width)
+        // 右下
+        drawLine(accent, Offset(x + w, y + h), Offset(x + w - corner, y + h), strokeWidth = cornerStroke.width)
+        drawLine(accent, Offset(x + w, y + h), Offset(x + w, y + h - corner), strokeWidth = cornerStroke.width)
+    }
+}
+
+/**
+ * 导出 CSV 时的存储权限闸门：
+ * - Android 10+ (Q)：MediaStore 不需要 WRITE_EXTERNAL_STORAGE，直接执行；
+ * - Android 9 及以下：检查/请求 WRITE_EXTERNAL_STORAGE，授予后再执行。
+ *
+ * 返回的 [ExportLauncher.launch] 在按钮 onClick 中调用即可。
+ */
+private class ExportLauncher(val launch: () -> Unit)
+
+@Composable
+private fun rememberExportLauncher(
+    onAuthorized: () -> Unit,
+    onDenied: () -> Unit,
+): ExportLauncher {
+    val context = LocalContext.current
+    val permissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> if (granted) onAuthorized() else onDenied() }
+
+    return remember(permissionLauncher) {
+        ExportLauncher {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                onAuthorized()
+            } else {
+                val perm = Manifest.permission.WRITE_EXTERNAL_STORAGE
+                if (ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED) {
+                    onAuthorized()
+                } else {
+                    permissionLauncher.launch(perm)
+                }
+            }
+        }
     }
 }
