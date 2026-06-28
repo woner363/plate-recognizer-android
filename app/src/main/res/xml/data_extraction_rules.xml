@@ -1,5 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ 的备份/迁移规则。车牌数据库与图片不进入云备份；
+  设备到设备迁移（device-transfer）保留默认行为，可由用户在系统迁移流程中决定。
+-->
 <data-extraction-rules>
-    <cloud-backup />
-    <device-transfer />
+    <cloud-backup>
+        <exclude domain="database" path="plates.db" />
+        <exclude domain="database" path="plates.db-shm" />
+        <exclude domain="database" path="plates.db-wal" />
+        <exclude domain="file" path="plates/" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="database" path="plates.db" />
+        <exclude domain="database" path="plates.db-shm" />
+        <exclude domain="database" path="plates.db-wal" />
+        <exclude domain="file" path="plates/" />
+    </device-transfer>
 </data-extraction-rules>

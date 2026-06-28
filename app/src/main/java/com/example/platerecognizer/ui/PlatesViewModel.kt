@@ -1,44 +1,57 @@
 package com.example.platerecognizer.ui
 
-import android.app.Application
 import android.net.Uri
-import androidx.lifecycle.AndroidViewModel
+import android.os.Parcelable
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.createSavedStateHandle
 import androidx.lifecycle.viewModelScope
-import com.example.platerecognizer.data.AppDatabase
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import com.example.platerecognizer.PlateRecognizerApp
+import com.example.platerecognizer.data.ImageStore
 import com.example.platerecognizer.data.PlateRecord
 import com.example.platerecognizer.data.PlateRepository
 import com.example.platerecognizer.ocr.PlateRecognizer
 import com.example.platerecognizer.util.PlateValidator
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.parcelize.Parcelize
 
-/** 一次性 UI 事件（提示、对话框）。 */
+/** 一次性 UI 事件——仅 Toast。需对话框的请求改走 [PlatesViewModel.pending]。 */
 sealed interface UiEvent {
     data class Toast(val message: String) : UiEvent
-    /** 需要用户确认 / 修正车牌。 */
-    data class RequestPlateInput(
-        val initial: String,
-        val confidence: Float,
-        val imageUri: Uri,
-        val error: String?,
-    ) : UiEvent
 }
 
-class PlatesViewModel(app: Application) : AndroidViewModel(app) {
+/**
+ * 待用户确认的识别结果。Parcelable + 存进 SavedStateHandle，
+ * 旋转屏幕 / Activity 重建 / 进程被回收后恢复时仍可见。
+ */
+@Parcelize
+data class PendingRecognition(
+    val initial: String,
+    val confidence: Float,
+    val imageUri: Uri,
+    val error: String?,
+) : Parcelable
 
-    private val repo: PlateRepository
-    private val recognizer = PlateRecognizer(app)
-
-    init {
-        val dao = AppDatabase.get(app).plateDao()
-        repo = PlateRepository(dao, app)
-    }
+class PlatesViewModel(
+    private val savedState: SavedStateHandle,
+    private val repo: PlateRepository,
+    private val recognizer: PlateRecognizer,
+    private val imageStore: ImageStore,
+) : ViewModel() {
 
     val records: StateFlow<List<PlateRecord>> =
         repo.observeAll().stateIn(
@@ -50,60 +63,190 @@ class PlatesViewModel(app: Application) : AndroidViewModel(app) {
     private val _isProcessing = MutableStateFlow(false)
     val isProcessing: StateFlow<Boolean> = _isProcessing.asStateFlow()
 
-    private val _events = MutableStateFlow<UiEvent?>(null)
-    val events: StateFlow<UiEvent?> = _events.asStateFlow()
+    /**
+     * 待确认状态。由 [SavedStateHandle] 持久化：
+     * - 配置变化（旋转）：进程内 StateFlow 自身保留；
+     * - Activity 重建 / 进程被回收：SavedStateHandle 会把 Parcelable 写入 bundle，
+     *   恢复时 getStateFlow 直接给回上次的值。
+     */
+    val pending: StateFlow<PendingRecognition?> =
+        savedState.getStateFlow(KEY_PENDING, null)
 
-    fun consumeEvent() {
-        _events.value = null
+    /**
+     * 一次性 Toast 通道（与 pending 互不相干，独立保留 Channel 形态）。
+     */
+    private val _events = Channel<UiEvent>(capacity = 16, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+    val events: Flow<UiEvent> = _events.receiveAsFlow()
+
+    private fun emit(event: UiEvent) {
+        _events.trySend(event)
     }
 
-    /** 抓拍/相册图像得到 URI 后，开始识别。 */
+    private fun setPending(value: PendingRecognition?) {
+        savedState[KEY_PENDING] = value
+    }
+
+    /**
+     * 串行化拍照/导入/OCR/入库整个流程：
+     * tryLock 失败立即拒绝并提示，避免两次识别互相覆盖。
+     * 此外，pending 存在时直接拒绝新识别——人工还没确认完，不允许覆盖。
+     */
+    private val recognitionMutex = Mutex()
+
     fun onImageCaptured(uri: Uri) {
-        viewModelScope.launch {
-            _isProcessing.value = true
+        launchSerial { processRecognition(uri) }
+    }
+
+    /**
+     * 抓拍专用入口：把 CameraX 的 takePicture 也拉进同一把锁，
+     * 这样"按下抓拍 → 文件落盘 → OCR → 入库"全程都被 isProcessing 覆盖。
+     */
+    fun capturePhotoThenRecognize(capture: suspend () -> Uri) {
+        launchSerial {
+            val uri = try {
+                capture()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("抓拍失败: ${e.message ?: "未知错误"}"))
+                return@launchSerial
+            }
+            processRecognition(uri)
+        }
+    }
+
+    /**
+     * 从相册选取一张图：先复制到 app 私有目录，再走识别流程。整段在同一把锁下，
+     * 这样 CSV 里 imageUri 长期可读，删除记录时也能被清理。
+     */
+    fun onImagePicked(source: Uri) {
+        launchSerial {
+            val local = try {
+                imageStore.importToLocal(source)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("导入失败: ${e.message ?: "未知错误"}"))
+                return@launchSerial
+            }
+            processRecognition(local)
+        }
+    }
+
+    private suspend fun processRecognition(uri: Uri) {
+        val result = try {
+            recognizer.recognize(uri)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emit(UiEvent.Toast("识别异常: ${e.message ?: "未知错误"}"))
+            null
+        }
+
+        if (result == null) {
+            setPending(
+                PendingRecognition(
+                    initial = "",
+                    confidence = 0f,
+                    imageUri = uri,
+                    error = "未检测到车牌",
+                )
+            )
+            return
+        }
+
+        val err = PlateValidator.describeError(result.plateNo)
+        if (err == null && result.confidence >= 0.9f) {
+            // 高置信度直接入库；DB 失败时回落到 pending，避免静默丢图片。
             try {
-                val result = runCatching { recognizer.recognize(getApplication(), uri) }
-                    .getOrElse { e ->
-                        _events.value = UiEvent.Toast("识别异常: ${e.message}")
-                        null
-                    }
-                if (result == null) {
-                    _events.value = UiEvent.RequestPlateInput(
-                        initial = "",
-                        confidence = 0f,
+                repo.add(result.plateNo, result.confidence, uri.toString())
+                emit(UiEvent.Toast("识别: ${result.plateNo}"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("保存失败，已转入人工确认: ${e.message ?: "未知错误"}"))
+                setPending(
+                    PendingRecognition(
+                        initial = result.plateNo,
+                        confidence = result.confidence,
                         imageUri = uri,
-                        error = "未检测到车牌",
+                        error = err,
                     )
-                } else {
-                    val err = PlateValidator.describeError(result.plateNo)
-                    if (err == null && result.confidence >= 0.9f) {
-                        // 高置信度直接入库
-                        repo.add(result.plateNo, result.confidence, uri.toString())
-                        _events.value = UiEvent.Toast("识别: ${result.plateNo}")
-                    } else {
-                        // 低置信度或格式不合规 → 要求确认/修正
-                        _events.value = UiEvent.RequestPlateInput(
-                            initial = result.plateNo,
-                            confidence = result.confidence,
-                            imageUri = uri,
-                            error = err,
-                        )
-                    }
-                }
+                )
+            }
+        } else {
+            setPending(
+                PendingRecognition(
+                    initial = result.plateNo,
+                    confidence = result.confidence,
+                    imageUri = uri,
+                    error = err,
+                )
+            )
+        }
+    }
+
+    /**
+     * 串行入口：
+     * - pending 还在 → 拒绝新识别（提示用户先处理上次结果）；
+     * - mutex tryLock 失败 → 已有任务在跑，提示并返回；
+     * - 否则进入 isProcessing。
+     */
+    private inline fun launchSerial(crossinline block: suspend () -> Unit) {
+        if (pending.value != null) {
+            emit(UiEvent.Toast("请先处理待确认的识别结果"))
+            return
+        }
+        if (!recognitionMutex.tryLock()) {
+            emit(UiEvent.Toast("识别已在进行中"))
+            return
+        }
+        _isProcessing.value = true
+        viewModelScope.launch {
+            try {
+                block()
             } finally {
                 _isProcessing.value = false
+                recognitionMutex.unlock()
             }
         }
     }
 
-    /** 对话框确认后保存（可能是首次入库，也可能用户决定保留非法格式）。 */
-    fun saveAfterPrompt(plateNo: String, confidence: Float, imageUri: Uri) {
+    /**
+     * 用户在确认对话框点"保存"后调用。
+     * - 入库成功才清空 pending；
+     * - 入库失败保留 pending 让用户重试（仅弹 Toast 提示）。
+     */
+    fun confirmPending(plateNo: String, note: String?) {
+        val current = pending.value ?: return
         viewModelScope.launch {
             try {
-                repo.add(plateNo, confidence, imageUri.toString())
-                _events.value = UiEvent.Toast("已保存: $plateNo")
-            } catch (e: Throwable) {
-                _events.value = UiEvent.Toast("保存失败: ${e.message}")
+                repo.add(plateNo, current.confidence, current.imageUri.toString(), note)
+                setPending(null)
+                emit(UiEvent.Toast("已保存: $plateNo"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("保存失败: ${e.message ?: "未知错误"}"))
+            }
+        }
+    }
+
+    /**
+     * 用户关闭确认对话框。删除已落盘的自有图片，再清 pending。
+     * 即使图片删除失败也清 pending —— 避免 UI 卡死，孤儿图片由后续启动扫描清理。
+     */
+    fun discardPending() {
+        val current = pending.value ?: return
+        // 立即清状态以解锁 UI；删图异步进行
+        setPending(null)
+        viewModelScope.launch {
+            try {
+                imageStore.deleteOwned(current.imageUri)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // 静默：清理失败不影响用户主流程
             }
         }
     }
@@ -112,36 +255,59 @@ class PlatesViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             try {
                 repo.applyCorrection(record, newPlate, note)
-                _events.value = UiEvent.Toast("已修正: ${record.plateNo} → $newPlate")
-            } catch (e: Throwable) {
-                _events.value = UiEvent.Toast("修正失败: ${e.message}")
+                emit(UiEvent.Toast("已修正: ${record.plateNo} → $newPlate"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("修正失败: ${e.message ?: "未知错误"}"))
             }
         }
     }
 
     fun delete(record: PlateRecord) {
-        viewModelScope.launch { repo.delete(record) }
+        viewModelScope.launch {
+            try {
+                repo.delete(record)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("删除失败: ${e.message ?: "未知错误"}"))
+            }
+        }
     }
 
     fun exportCsv() {
         viewModelScope.launch {
             try {
                 val (count, filename) = repo.exportCsv()
-                _events.value = UiEvent.Toast("已导出 $count 条到 Download/$filename")
-            } catch (e: Throwable) {
-                _events.value = UiEvent.Toast("导出失败: ${e.message}")
+                emit(UiEvent.Toast("已导出 $count 条到 Download/$filename"))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emit(UiEvent.Toast("导出失败: ${e.message ?: "未知错误"}"))
             }
         }
     }
 
     override fun onCleared() {
         super.onCleared()
-        recognizer.close()
+        // recognizer 由 AppContainer 持有（进程级），不在此关闭。
     }
 
     companion object {
-        val Factory = object : ViewModelProvider.AndroidViewModelFactory() {
-            // Default Application factory 已能用；显式给个名字方便引用
+        private const val KEY_PENDING = "pending_recognition"
+
+        val Factory: ViewModelProvider.Factory = viewModelFactory {
+            initializer<PlatesViewModel> {
+                val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as PlateRecognizerApp
+                val c = app.container
+                PlatesViewModel(
+                    savedState = createSavedStateHandle(),
+                    repo = c.repository,
+                    recognizer = c.recognizer,
+                    imageStore = c.imageStore,
+                )
+            }
         }
     }
 }

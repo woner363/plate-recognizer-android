@@ -61,7 +61,8 @@ cd plate-recognizer-android
 ```
 
 > 首次构建会从 Maven Central / Google 仓库下载依赖，需要网络。
-> 由于 Gradle wrapper jar 是二进制（无法在此文本环境创建），第一次请在 Android Studio 中点击 "Sync Project" 让它自动生成，或者运行 `gradle wrapper --gradle-version 8.7`。
+> 仓库已包含 Gradle Wrapper（`gradlew` / `gradlew.bat` / `gradle/wrapper/gradle-wrapper.jar`，
+> 对应 Gradle 8.7），全新克隆后无需全局安装 Gradle 即可直接 `./gradlew tasks`，只需本机有 JDK 17。
 
 ## 与桌面 Python 版的对应关系
 
