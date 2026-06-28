@@ -1,32 +1,46 @@
 package com.example.platerecognizer.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.platerecognizer.data.PlateRecord
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
-/** 识别记录表（卡片列表）。 */
+/** 轻量记录流：信息密度足够，但不把每一条记录做成“表格”。 */
 @Composable
 fun RecordsList(
     records: List<PlateRecord>,
@@ -35,79 +49,176 @@ fun RecordsList(
     modifier: Modifier = Modifier,
 ) {
     if (records.isEmpty()) {
-        Text(
-            "暂无记录。点击下方相机按钮抓拍。",
-            modifier = modifier.padding(16.dp),
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        EmptyRecords(modifier)
         return
     }
 
     LazyColumn(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(records, key = { it.id }) { r ->
-            RecordCard(r, onEdit = onEdit, onDelete = onDelete)
+        items(records, key = { it.id }) { record ->
+            RecordCard(record, onEdit = onEdit, onDelete = onDelete)
         }
     }
 }
 
-private val df = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+@Composable
+private fun EmptyRecords(modifier: Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 32.dp, vertical = 24.dp),
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer,
+                modifier = Modifier.size(56.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.PhotoCamera,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(
+                text = "还没有识别记录",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "对准车牌拍摄，结果会安全保存在本机",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
 
 @Composable
 private fun RecordCard(
-    r: PlateRecord,
+    record: PlateRecord,
     onEdit: (PlateRecord) -> Unit,
     onDelete: (PlateRecord) -> Unit,
 ) {
-    // 直接用 inline lambda：r 内容可能变化（修正后），缓存反而会捕获旧 r。
-    // Compose 重组时这点 lambda 分配开销可忽略，正确性优先。
-    Card(
+    val locale = Locale.getDefault()
+    val note = record.note
+    val capturedTime = remember(record.capturedAt, locale) {
+        SimpleDateFormat("MM-dd  HH:mm", locale).format(Date(record.capturedAt))
+    }
+
+    Surface(
         modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp).fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.padding(start = 16.dp, top = 14.dp, end = 8.dp, bottom = 12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
                     Text(
-                        r.plateNo,
-                        style = MaterialTheme.typography.titleMedium,
+                        text = record.plateNo,
+                        style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
+                        letterSpacing = 1.2.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    if (r.corrected) {
+                    Spacer(Modifier.height(5.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "  ✓已修正",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            text = capturedTime,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (record.corrected) {
+                            Spacer(Modifier.width(8.dp))
+                            StatusBadge("已修正")
+                        }
                     }
                 }
-                Text(
-                    "时间：${df.format(Date(r.capturedAt))}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Text(
-                    "置信度：${"%.2f".format(r.confidence)}",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                if (!r.note.isNullOrBlank()) {
-                    Text(
-                        "备注：${r.note}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.secondary,
+
+                ConfidenceBadge(record.confidence)
+                IconButton(onClick = { onEdit(record) }) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "修正 ${record.plateNo}",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(onClick = { onDelete(record) }) {
+                    Icon(
+                        imageVector = Icons.Default.DeleteOutline,
+                        contentDescription = "删除 ${record.plateNo}",
+                        tint = MaterialTheme.colorScheme.error,
                     )
                 }
             }
-            IconButton(onClick = { onEdit(r) }) {
-                Icon(Icons.Default.Edit, contentDescription = "修正")
-            }
-            IconButton(onClick = { onDelete(r) }) {
-                Icon(Icons.Default.Delete, contentDescription = "删除")
+
+            if (!note.isNullOrBlank()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(top = 10.dp, end = 8.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
+                Text(
+                    text = note,
+                    modifier = Modifier.padding(top = 10.dp, end = 8.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
+    }
+}
+
+@Composable
+private fun ConfidenceBadge(confidence: Float) {
+    val isHigh = confidence >= 0.9f
+    Surface(
+        shape = CircleShape,
+        color = if (isHigh) {
+            MaterialTheme.colorScheme.tertiaryContainer
+        } else {
+            MaterialTheme.colorScheme.secondaryContainer
+        },
+    ) {
+        Text(
+            text = "${(confidence.coerceIn(0f, 1f) * 100).roundToInt()}%",
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = if (isHigh) {
+                MaterialTheme.colorScheme.onTertiaryContainer
+            } else {
+                MaterialTheme.colorScheme.onSecondaryContainer
+            },
+        )
+    }
+}
+
+@Composable
+private fun StatusBadge(text: String) {
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.primaryContainer,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onPrimaryContainer,
+        )
     }
 }
