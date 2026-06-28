@@ -1,3 +1,4 @@
 <resources>
+    <!-- Compose 实际配色由 PlateRecognizerTheme 决定；此处只提供合法的 Activity 主题宿主。 -->
     <style name="Theme.PlateRecognizer" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>
