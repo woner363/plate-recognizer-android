@@ -9,6 +9,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
@@ -117,21 +118,49 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
                     .fillMaxWidth()
                     .aspectRatio(4f / 3f),
             ) {
+                var cameraError by remember { mutableStateOf<String?>(null) }
+
                 AndroidView(
                     factory = { ctx ->
                         PreviewView(ctx).also { previewView ->
+                            previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
                             val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                             cameraProviderFuture.addListener({
-                                val provider = cameraProviderFuture.get()
-                                val preview = Preview.Builder().build().also {
-                                    it.setSurfaceProvider(previewView.surfaceProvider)
-                                }
-                                val selector = CameraSelector.DEFAULT_BACK_CAMERA
                                 try {
-                                    provider.unbindAll()
-                                    provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
+                                    val provider = cameraProviderFuture.get()
+                                    val preview = Preview.Builder().build().also {
+                                        it.setSurfaceProvider(previewView.surfaceProvider)
+                                    }
+                                    val selector = CameraSelector.DEFAULT_BACK_CAMERA
+
+                                    // PreviewView 第一次进 onPreDraw 时 viewPort 才非空——
+                                    // 用 post 把绑定推到布局完成之后，确保 ImageCapture
+                                    // 与 Preview 共用同一个 viewPort（所见即所得裁剪）。
+                                    previewView.post post@{
+                                        try {
+                                            provider.unbindAll()
+                                            val viewPort = previewView.viewPort
+                                            if (viewPort != null) {
+                                                val group = UseCaseGroup.Builder()
+                                                    .addUseCase(preview)
+                                                    .addUseCase(imageCapture)
+                                                    .setViewPort(viewPort)
+                                                    .build()
+                                                provider.bindToLifecycle(lifecycleOwner, selector, group)
+                                            } else {
+                                                // 极少数情况下 viewPort 仍为空（PreviewView 未完成首帧），
+                                                // 退化绑定，至少不崩。
+                                                provider.bindToLifecycle(
+                                                    lifecycleOwner, selector, preview, imageCapture,
+                                                )
+                                            }
+                                        } catch (e: Exception) {
+                                            cameraError = "相机绑定失败：${e.message ?: "未知错误"}"
+                                            e.printStackTrace()
+                                        }
+                                    }
                                 } catch (e: Exception) {
-                                    // 真机/模拟器无相机时不致崩溃
+                                    cameraError = "相机不可用：${e.message ?: "未知错误"}"
                                     e.printStackTrace()
                                 }
                             }, ContextCompat.getMainExecutor(ctx))
@@ -141,6 +170,19 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
                 )
                 // 取景框遮罩——固定比例 [PLATE_ROI]，让用户对齐再拍
                 PlateViewfinder(modifier = Modifier.fillMaxSize())
+                cameraError?.let { msg ->
+                    Box(
+                        Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            msg,
+                            color = Color.White,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(16.dp),
+                        )
+                    }
+                }
                 if (isProcessing) {
                     Box(
                         Modifier.fillMaxSize(),
