@@ -28,4 +28,8 @@ interface PlateDao {
 
     @Query("DELETE FROM plates WHERE id = :id")
     suspend fun deleteById(id: Long)
+
+    /** 列出所有非空 image_uri，供启动时孤儿文件扫描使用。 */
+    @Query("SELECT image_uri FROM plates WHERE image_uri IS NOT NULL")
+    suspend fun listAllImageUris(): List<String>
 }

@@ -54,4 +54,57 @@ class ImageStore(context: Context) {
             target.delete()
         }.getOrDefault(false)
     }
+
+    /**
+     * 启动时扫描 [dir] 下的所有文件，删除既不被数据库引用、也不在保留期内的文件。
+     *
+     * 保留逻辑（任一满足则保留）：
+     * 1. 文件 file:// URI 出现在 [referencedUris] 集合中（被某条 DB 记录引用）；
+     * 2. 修改时间在 [retentionMillis] 之内（默认 24h）—— 用户可能刚拍但还在
+     *    人工确认对话框里没保存，不应被清掉。
+     *
+     * 返回被删除的文件数，用于日志。失败不抛异常，按"尽力而为"清理。
+     */
+    suspend fun cleanupOrphans(
+        referencedUris: Collection<String>,
+        retentionMillis: Long = DEFAULT_RETENTION_MS,
+    ): Int = withContext(Dispatchers.IO) {
+        cleanupOrphansIn(dir, referencedUris, retentionMillis, System.currentTimeMillis())
+    }
+
+    companion object {
+        /** 孤儿清理保留期：24 小时。pending 图片不会被误清。 */
+        const val DEFAULT_RETENTION_MS: Long = 24L * 60 * 60 * 1000
+
+        /**
+         * 纯 Kotlin 实现，便于单测注入假目录/假时间。不依赖 Android Uri 解析——
+         * 用字符串前缀 `file://` 提取本地路径即可。
+         */
+        internal fun cleanupOrphansIn(
+            root: File,
+            referencedUris: Collection<String>,
+            retentionMillis: Long,
+            now: Long,
+        ): Int {
+            val files = root.listFiles() ?: return 0
+            val referenced = referencedUris.mapNotNullTo(HashSet()) { extractCanonicalPath(it) }
+            var deleted = 0
+            for (f in files) {
+                if (!f.isFile) continue
+                val canonical = runCatching { f.canonicalPath }.getOrNull() ?: continue
+                if (canonical in referenced) continue
+                if (now - f.lastModified() < retentionMillis) continue
+                if (runCatching { f.delete() }.getOrDefault(false)) deleted++
+            }
+            return deleted
+        }
+
+        /** 把 "file:///path/to/foo.jpg" 提取为 canonical 路径；非法/非 file 返回 null。 */
+        private fun extractCanonicalPath(raw: String): String? {
+            if (!raw.startsWith("file://")) return null
+            val path = raw.removePrefix("file://").substringBefore('?').substringBefore('#')
+            if (path.isEmpty()) return null
+            return runCatching { File(path).canonicalPath }.getOrNull()
+        }
+    }
 }
