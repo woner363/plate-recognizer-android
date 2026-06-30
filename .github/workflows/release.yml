@@ -28,14 +28,66 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      # §4.1：固定 debug keystore，让连续 Release 签名一致、可覆盖升级。
+      # 首次运行生成，之后从 cache 恢复。cache key 固定，需要轮换时 bump 到 v2。
+      - name: Restore debug keystore
+        id: keystore
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/ci-debug.keystore
+          key: ci-debug-keystore-v1
+
+      - name: Generate debug keystore if missing
+        if: steps.keystore.outputs.cache-hit != 'true'
+        run: |
+          keytool -genkeypair -v \
+            -keystore ${{ runner.temp }}/ci-debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Plate Recognizer CI Debug, O=CI, C=US"
+
       - name: Run unit tests
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
+          CI_DEBUG_KEYSTORE_PASSWORD: android
+          CI_DEBUG_KEY_ALIAS: androiddebugkey
+          CI_DEBUG_KEY_PASSWORD: android
         run: ./gradlew --no-daemon :app:testDebugUnitTest
 
       - name: Run Android Lint
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
+          CI_DEBUG_KEYSTORE_PASSWORD: android
+          CI_DEBUG_KEY_ALIAS: androiddebugkey
+          CI_DEBUG_KEY_PASSWORD: android
         run: ./gradlew --no-daemon :app:lintDebug
 
       - name: Assemble debug APK
+        env:
+          CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
+          CI_DEBUG_KEYSTORE_PASSWORD: android
+          CI_DEBUG_KEY_ALIAS: androiddebugkey
+          CI_DEBUG_KEY_PASSWORD: android
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      # §4.1：校验签名证书指纹，与预期一致才继续发布。
+      - name: Verify signing certificate
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
+            | grep "SHA-256 digest" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+          echo "APK signer SHA-256: $CERT"
+          # 期望指纹写在这里；首次 Release 后填入实际值，后续变更会触发失败。
+          EXPECTED="${{ vars.CI_DEBUG_CERT_SHA256 }}"
+          if [ -n "$EXPECTED" ] && [ "$CERT" != "$EXPECTED" ]; then
+            echo "::error::签名证书指纹不匹配（期望 $EXPECTED，实际 $CERT）"
+            exit 1
+          fi
+          echo "cert_sha256=$CERT" >> "$GITHUB_ENV"
 
       - name: Stage artifacts
         id: stage
@@ -52,6 +104,7 @@ jobs:
             echo "- 构建命令: \`./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug\`"
             echo "- 环境: GitHub Actions \`ubuntu-latest\` · JDK 17 (Temurin) · Gradle Wrapper 8.7"
             echo "- APK SHA256: \`$SHA\`"
+            echo "- 签名证书 SHA-256: \`${{ env.cert_sha256 }}\`"
           } > out/ci-notes.md
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
 

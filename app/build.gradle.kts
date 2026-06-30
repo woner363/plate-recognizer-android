@@ -17,16 +17,36 @@ android {
         targetSdk = 34
         // 版本号与 GitHub Release tag 对齐：versionCode 单调递增，
         // versionName 形如 "0.2.4-debug"。改版本时记得同步发对应 tag。
-        versionCode = 24
-        versionName = "0.2.4-debug"
+        versionCode = 25
+        versionName = "0.2.5-debug"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }
 
+    // §4.1：CI 提供固定 debug keystore 时用它签名，保证连续 Release 签名一致、可覆盖升级。
+    // 本地开发不设这些环境变量，回退到 AGP 默认的 debug signingConfig（~/.android/debug.keystore）。
+    // keystore 不是机密（debug key 本就公开性质），可放 actions/cache 而非 secrets。
+    signingConfigs {
+        if (providers.environmentVariable("CI_DEBUG_KEYSTORE_PATH").isPresent) {
+            create("ciDebug") {
+                storeFile = file(providers.environmentVariable("CI_DEBUG_KEYSTORE_PATH").get())
+                storePassword = providers.environmentVariable("CI_DEBUG_KEYSTORE_PASSWORD").orElse("android").get()
+                keyAlias = providers.environmentVariable("CI_DEBUG_KEY_ALIAS").orElse("androiddebugkey").get()
+                keyPassword = providers.environmentVariable("CI_DEBUG_KEY_PASSWORD").orElse("android").get()
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            // CI 有固定 keystore 时用它；否则用默认 debug 签名。
+            signingConfig = signingConfigs.findByName("ciDebug") ?: signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // release 也用同一份 CI debug key，保证与 debug 产物签名一致（便于覆盖升级测试）。
+            signingConfig = signingConfigs.findByName("ciDebug") ?: signingConfigs.getByName("debug")
         }
     }
     compileOptions {
@@ -84,6 +104,10 @@ dependencies {
 
     // Accompanist permissions (Compose)
     implementation(libs.accompanist.permissions)
+
+    // §4.7：androidx.exifinterface 替代 platform android.media.ExifInterface
+    // （后者被 Lint 标记 deprecated，且前者支持更多 EXIF 方向）。
+    implementation(libs.androidx.exifinterface)
 
     // Tests
     testImplementation(libs.junit)
