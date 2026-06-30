@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -35,15 +36,18 @@ fun PlateInputDialog(
     initial: String,
     onDismiss: () -> Unit,
     onConfirm: (plate: String, note: String?) -> Unit,
+    /** §4.3：保存进行中时禁用取消按钮与点击外部关闭，避免中途放弃导致状态竞争。 */
+    dismissEnabled: Boolean = true,
 ) {
-    var plate by remember(initial) { mutableStateOf(initial) }
-    var note by remember { mutableStateOf("") }
+    // §4.10：用 rememberSaveable 而非 remember，Activity 重建后保留用户已输入内容。
+    var plate by rememberSaveable(initial) { mutableStateOf(initial) }
+    var note by rememberSaveable { mutableStateOf("") }
 
     val error = PlateValidator.describeError(plate)
     val normalized = PlateValidator.normalize(plate)
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (dismissEnabled) onDismiss() },
         shape = RoundedCornerShape(28.dp),
         containerColor = MaterialTheme.colorScheme.surface,
         title = {
@@ -98,7 +102,7 @@ fun PlateInputDialog(
             Button(
                 // §4.4：格式错误时禁用普通保存，必须通过校验才能落库。
                 // 业务层（ViewModel.confirmPending）会再次校验，UI 与 VM 双保险。
-                enabled = error == null && normalized.isNotEmpty(),
+                enabled = error == null && normalized.isNotEmpty() && dismissEnabled,
                 shape = RoundedCornerShape(14.dp),
                 onClick = { onConfirm(normalized, note.ifBlank { null }) },
             ) {
@@ -106,7 +110,10 @@ fun PlateInputDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                enabled = dismissEnabled,
+                onClick = onDismiss,
+            ) { Text("取消") }
         },
     )
 }
