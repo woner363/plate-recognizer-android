@@ -43,6 +43,9 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.doOnLayout
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
 import com.example.platerecognizer.camera.PhotoCapturer
 
 @Composable
@@ -73,22 +76,17 @@ internal fun CameraPreviewCard(
                                     it.setSurfaceProvider(previewView.surfaceProvider)
                                 }
                                 val selector = CameraSelector.DEFAULT_BACK_CAMERA
-                                previewView.post {
+                                // §4.7：doOnLayout 确保 ViewPort 已就绪再绑定，不永久降级。
+                                previewView.doOnLayout {
                                     try {
                                         provider.unbindAll()
                                         val viewPort = previewView.viewPort
-                                        if (viewPort != null) {
-                                            val group = UseCaseGroup.Builder()
-                                                .addUseCase(preview)
-                                                .addUseCase(imageCapture)
-                                                .setViewPort(viewPort)
-                                                .build()
-                                            provider.bindToLifecycle(lifecycleOwner, selector, group)
-                                        } else {
-                                            provider.bindToLifecycle(
-                                                lifecycleOwner, selector, preview, imageCapture,
-                                            )
-                                        }
+                                        val group = UseCaseGroup.Builder()
+                                            .addUseCase(preview)
+                                            .addUseCase(imageCapture)
+                                            .apply { viewPort?.let { vp -> setViewPort(vp) } }
+                                            .build()
+                                        provider.bindToLifecycle(lifecycleOwner, selector, group)
                                         cameraError = null
                                     } catch (e: Exception) {
                                         cameraError = "相机绑定失败：${e.message ?: "未知错误"}"
@@ -102,6 +100,17 @@ internal fun CameraPreviewCard(
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            // §4.7：Composable 移除时解绑相机，释放硬件资源，避免"相机已被占用"。
+            val disposeContext = LocalContext.current
+            DisposableEffect(disposeContext) {
+                onDispose {
+                    val providerFuture = ProcessCameraProvider.getInstance(disposeContext)
+                    providerFuture.addListener({
+                        runCatching { providerFuture.get().unbindAll() }
+                    }, ContextCompat.getMainExecutor(disposeContext))
+                }
+            }
 
             PlateViewfinder(modifier = Modifier.fillMaxSize())
             CameraStatus(
