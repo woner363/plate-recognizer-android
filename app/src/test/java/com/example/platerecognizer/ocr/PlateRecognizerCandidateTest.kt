@@ -21,7 +21,9 @@ class PlateRecognizerCandidateTest {
         val r = PlateRecognizer.pickBestCandidate("车架号: ABCDEF\n车牌 京A12345 已登记")
         assertNotNull(r)
         assertEquals("京A12345", r!!.plateNo)
-        assertTrue("高置信度: ${r.confidence}", r.confidence >= 0.9f)
+        // §4.2：qualityScore 是候选质量分，不是 OCR 概率。
+        // 合法 7 位号牌质量分较高，但**不**用于断言"自动入库"。
+        assertTrue("质量分应在合理区间: ${r.qualityScore}", r.qualityScore in 0.85f..0.98f)
     }
 
     @Test fun strips_inner_whitespace_before_window() {
@@ -65,23 +67,23 @@ class PlateRecognizerCandidateTest {
         val r = PlateRecognizer.pickBestCandidate("粤BIO34")  // 6 位，省份+...
         assertNotNull(r)
         // 不会被判为合法车牌（首字母后位数错）但仍走 fallback
-        assertTrue("fallback 置信度低于 0.85: ${r!!.confidence}", r.confidence < 0.85f)
+        assertTrue("fallback 质量分低于 0.85: ${r!!.qualityScore}", r.qualityScore < 0.85f)
         assertTrue("应含 fallback 子串", r.plateNo.startsWith("粤"))
     }
 
-    @Test fun last_resort_returns_low_confidence() {
+    @Test fun last_resort_returns_low_quality() {
         // 完全不含省份首字
         val r = PlateRecognizer.pickBestCandidate("ABCDEFGH")
         assertNotNull(r)
-        assertEquals(0.10f, r!!.confidence, 0.001f)
+        assertEquals(0.10f, r!!.qualityScore, 0.001f)
     }
 
-    @Test fun confidence_below_threshold_for_new_energy() {
-        // 新能源 8 位虽然合法，但评分较低 → 走人工确认而非直接入库
+    @Test fun new_energy_still_requires_confirmation() {
+        // 新能源 8 位虽然合法，但 qualityScore 只是排序分，不再有"自动入库"路径。
+        // 所有结果一律走人工确认。
         val r = PlateRecognizer.pickBestCandidate("京AD12345")
         assertNotNull(r)
         assertEquals("京AD12345", r!!.plateNo)
-        // 视为「合法但需确认」：confidence 落在 [0.85, 0.9) 区间
-        assertTrue("应 ≥ 0.85: ${r.confidence}", r.confidence >= 0.85f)
+        assertTrue("质量分 ≥ 0.85: ${r.qualityScore}", r.qualityScore >= 0.85f)
     }
 }
