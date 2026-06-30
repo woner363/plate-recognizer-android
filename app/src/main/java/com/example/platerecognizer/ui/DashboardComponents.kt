@@ -68,7 +68,7 @@ internal fun AppHeader(
             text = when {
                 isProcessing -> "识别中"
                 hasPending -> "待确认"
-                else -> "本地离线"
+                else -> "本地识别"
             },
             active = isProcessing || hasPending,
         )

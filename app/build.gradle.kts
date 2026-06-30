@@ -15,8 +15,10 @@ android {
         applicationId = "com.example.platerecognizer"
         minSdk = 24            // Android 7.0+，覆盖 ~98%
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        // 版本号与 GitHub Release tag 对齐：versionCode 单调递增，
+        // versionName 形如 "0.2.4-debug"。改版本时记得同步发对应 tag。
+        versionCode = 24
+        versionName = "0.2.4-debug"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }

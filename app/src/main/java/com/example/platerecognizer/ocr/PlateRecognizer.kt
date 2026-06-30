@@ -70,7 +70,7 @@ class PlateRecognizer(context: Context) {
      * 既然相机输入已经被取景框 ROI 裁剪到约 3.14:1 范围，几何形状的过滤工作主要
      * 由 ROI 完成。本函数只在多候选时使用"几何相似度"作为**加权评分**，而非淘汰条件。
      *
-     * 兜底：所有 block 都没有合法候选时，对整段全文做一次匹配；confidence 封顶
+     * 兜底：所有 block 都没有合法候选时，对整段全文做一次匹配；qualityScore 封顶
      * 0.7，确保走人工确认。
      */
     private fun pickBestFromBlocks(text: Text, imgW: Int, imgH: Int): Recognition? {
@@ -96,18 +96,18 @@ class PlateRecognizer(context: Context) {
                     imageArea.toDouble()
                 if (areaRatio >= 0.01) bonus += 0.03f
             }
-            scored += Scored(recog, recog.confidence + bonus)
+            scored += Scored(recog, recog.qualityScore + bonus)
         }
 
         if (scored.isNotEmpty()) {
             val best = scored.maxBy { it.score }
-            // confidence 截断到 [0,0.98]：加权只用来排序，对外仍按 pickBestCandidate 的原 confidence
+            // 加权只用来在多候选间排序，对外仍按 pickBestCandidate 的原 qualityScore。
             return best.recog
         }
 
         // 全文兜底
         val fallback = pickBestCandidate(text.text) ?: return null
-        return fallback.copy(confidence = fallback.confidence.coerceAtMost(MAX_FALLBACK_CONFIDENCE))
+        return fallback.copy(qualityScore = fallback.qualityScore.coerceAtMost(MAX_FALLBACK_QUALITY))
     }
 
     /** 关闭释放资源。幂等。 */
@@ -118,8 +118,8 @@ class PlateRecognizer(context: Context) {
     }
 
     companion object {
-        /** 几何过滤无果时，从全文捞回的候选 confidence 封顶。 */
-        private const val MAX_FALLBACK_CONFIDENCE = 0.7f
+        /** 几何过滤无果时，从全文捞回的候选 qualityScore 封顶。 */
+        private const val MAX_FALLBACK_QUALITY = 0.7f
 
         private const val PROVINCES = "京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼"
         private val fallbackRe = Regex("[$PROVINCES][A-Za-z0-9]{4,9}")
@@ -150,7 +150,7 @@ class PlateRecognizer(context: Context) {
                 val kept = hits.filterNot { it.len == 7 && it.start in eightStarts }
                 val best = kept.distinctBy { it.plate }.maxBy { scoreValid(it.plate) }
                 val conf = (0.85f + scoreValid(best.plate) * 0.013f).coerceIn(0.85f, 0.98f)
-                return Recognition(plateNo = best.plate, confidence = conf)
+                return Recognition(plateNo = best.plate, qualityScore = conf)
             }
 
             // fallback：含省份首字的最长字母数字段
@@ -162,11 +162,11 @@ class PlateRecognizer(context: Context) {
                     norm.length == 6 -> 0.45f
                     else -> 0.30f
                 }
-                return Recognition(norm, conf)
+                return Recognition(norm, qualityScore = conf)
             }
 
             val trimmed = PlateValidator.normalize(flat.take(8))
-            return if (trimmed.isEmpty()) null else Recognition(trimmed, 0.10f)
+            return if (trimmed.isEmpty()) null else Recognition(trimmed, qualityScore = 0.10f)
         }
 
         /**

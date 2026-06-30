@@ -148,7 +148,7 @@ private fun RecordCard(
                     }
                 }
 
-                ConfidenceBadge(record.confidence)
+                QualityBadge(record.confidence)
                 IconButton(onClick = { onEdit(record) }) {
                     Icon(
                         imageVector = Icons.Default.Edit,
@@ -183,29 +183,42 @@ private fun RecordCard(
     }
 }
 
+/**
+ * 候选质量徽标。§4.2：这不是 OCR 字符识别概率，而是格式合法性 + 长度常见度的
+ * 启发式评分，仅用于提示"这条记录当时质量如何"。用"高/中/低"档位而非精确百分比，
+ * 避免误导用户以为是模型置信度。
+ */
 @Composable
-private fun ConfidenceBadge(confidence: Float) {
-    val isHigh = confidence >= 0.9f
+private fun QualityBadge(qualityScore: Float) {
+    val level = when {
+        qualityScore >= 0.9f -> QualityLevel.HIGH
+        qualityScore >= 0.5f -> QualityLevel.MID
+        else -> QualityLevel.LOW
+    }
     Surface(
         shape = CircleShape,
-        color = if (isHigh) {
-            MaterialTheme.colorScheme.tertiaryContainer
-        } else {
-            MaterialTheme.colorScheme.secondaryContainer
+        color = when (level) {
+            QualityLevel.HIGH -> MaterialTheme.colorScheme.tertiaryContainer
+            QualityLevel.MID -> MaterialTheme.colorScheme.secondaryContainer
+            QualityLevel.LOW -> MaterialTheme.colorScheme.errorContainer
         },
     ) {
         Text(
-            text = "${(confidence.coerceIn(0f, 1f) * 100).roundToInt()}%",
+            text = level.label,
             modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            color = if (isHigh) {
-                MaterialTheme.colorScheme.onTertiaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSecondaryContainer
+            color = when (level) {
+                QualityLevel.HIGH -> MaterialTheme.colorScheme.onTertiaryContainer
+                QualityLevel.MID -> MaterialTheme.colorScheme.onSecondaryContainer
+                QualityLevel.LOW -> MaterialTheme.colorScheme.onErrorContainer
             },
         )
     }
+}
+
+private enum class QualityLevel(val label: String) {
+    HIGH("质量高"), MID("质量中"), LOW("质量低")
 }
 
 @Composable

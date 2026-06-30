@@ -5,7 +5,12 @@
 ## 功能
 
 - 🎥 **CameraX 实时预览** + 一键抓拍
-- 🤖 **ML Kit Text Recognition v2（中文）** 离线 OCR，无需联网、无 API key
+- 🤖 **ML Kit Text Recognition v2（中文）** 本地 OCR，识别过程在设备完成、无需 API key
+
+> **隐私与网络说明**：车牌识别（OCR）在本地完成，照片与识别文本不会上传到本应用的服务器。
+> 但 ML Kit 依赖会合并 `INTERNET` / `ACCESS_NETWORK_STATE` 权限（来自 Google DataTransport，
+> 用于 ML Kit 自身的配置/诊断遥测），因此本应用并非"完全无网络能力"。如需严格离线，
+> 可在 Manifest merger 中移除这些权限并自行验证 ML Kit 在断网下的初始化。
 - 🔍 自动从识别文本中提取符合中国车牌格式（普通 / 新能源）的子串
 - 📋 **Room（SQLite）** 持久化：车牌号 / 置信度 / 时间 / 图片 URI / 已修正 / 备注
 - ✏️ **手动修正**：识别错误一键改，带格式校验和备注

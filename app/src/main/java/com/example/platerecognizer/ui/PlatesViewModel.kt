@@ -37,11 +37,13 @@ sealed interface UiEvent {
 /**
  * 待用户确认的识别结果。Parcelable + 存进 SavedStateHandle，
  * 旋转屏幕 / Activity 重建 / 进程被回收后恢复时仍可见。
+ *
+ * @param qualityScore 候选质量分（不是 OCR 概率），仅用于 UI 提示。
  */
 @Parcelize
 data class PendingRecognition(
     val initial: String,
-    val confidence: Float,
+    val qualityScore: Float,
     val imageUri: Uri,
     val error: String?,
 ) : Parcelable
@@ -147,7 +149,7 @@ class PlatesViewModel(
             setPending(
                 PendingRecognition(
                     initial = "",
-                    confidence = 0f,
+                    qualityScore = 0f,
                     imageUri = uri,
                     error = "未检测到车牌",
                 )
@@ -155,35 +157,18 @@ class PlatesViewModel(
             return
         }
 
+        // §4.2：不再用启发式 qualityScore 自动入库。
+        // qualityScore 只反映"格式是否合法、长度是否常见"，无法判断 OCR 是否把
+        // 8 识别成 B。所有识别结果一律走人工确认，由 PlateValidator 给出格式错误提示。
         val err = PlateValidator.describeError(result.plateNo)
-        if (err == null && result.confidence >= 0.9f) {
-            // 高置信度直接入库；DB 失败时回落到 pending，避免静默丢图片。
-            try {
-                repo.add(result.plateNo, result.confidence, uri.toString())
-                emit(UiEvent.Toast("识别: ${result.plateNo}"))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                emit(UiEvent.Toast("保存失败，已转入人工确认: ${e.message ?: "未知错误"}"))
-                setPending(
-                    PendingRecognition(
-                        initial = result.plateNo,
-                        confidence = result.confidence,
-                        imageUri = uri,
-                        error = err,
-                    )
-                )
-            }
-        } else {
-            setPending(
-                PendingRecognition(
-                    initial = result.plateNo,
-                    confidence = result.confidence,
-                    imageUri = uri,
-                    error = err,
-                )
+        setPending(
+            PendingRecognition(
+                initial = result.plateNo,
+                qualityScore = result.qualityScore,
+                imageUri = uri,
+                error = err,
             )
-        }
+        )
     }
 
     /**
@@ -214,16 +199,24 @@ class PlatesViewModel(
 
     /**
      * 用户在确认对话框点"保存"后调用。
+     * - §4.4：业务层强制校验车牌格式，非法车牌拒绝保存（UI 也已 disable 按钮，
+     *   但防 UI 漏洞或未来其他调用方绕过）；
      * - 入库成功才清空 pending；
      * - 入库失败保留 pending 让用户重试（仅弹 Toast 提示）。
      */
     fun confirmPending(plateNo: String, note: String?) {
         val current = pending.value ?: return
+        val normalized = PlateValidator.normalize(plateNo)
+        val err = PlateValidator.describeError(normalized)
+        if (err != null) {
+            emit(UiEvent.Toast(err))
+            return
+        }
         viewModelScope.launch {
             try {
-                repo.add(plateNo, current.confidence, current.imageUri.toString(), note)
+                repo.add(normalized, current.qualityScore, current.imageUri.toString(), note)
                 setPending(null)
-                emit(UiEvent.Toast("已保存: $plateNo"))
+                emit(UiEvent.Toast("已保存: $normalized"))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -252,10 +245,16 @@ class PlatesViewModel(
     }
 
     fun applyCorrection(record: PlateRecord, newPlate: String, note: String?) {
+        val normalized = PlateValidator.normalize(newPlate)
+        val err = PlateValidator.describeError(normalized)
+        if (err != null) {
+            emit(UiEvent.Toast(err))
+            return
+        }
         viewModelScope.launch {
             try {
-                repo.applyCorrection(record, newPlate, note)
-                emit(UiEvent.Toast("已修正: ${record.plateNo} → $newPlate"))
+                repo.applyCorrection(record, normalized, note)
+                emit(UiEvent.Toast("已修正: ${record.plateNo} → $normalized"))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

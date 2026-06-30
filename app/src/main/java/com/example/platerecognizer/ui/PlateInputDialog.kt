@@ -96,7 +96,9 @@ fun PlateInputDialog(
         },
         confirmButton = {
             Button(
-                enabled = normalized.isNotEmpty(),
+                // §4.4：格式错误时禁用普通保存，必须通过校验才能落库。
+                // 业务层（ViewModel.confirmPending）会再次校验，UI 与 VM 双保险。
+                enabled = error == null && normalized.isNotEmpty(),
                 shape = RoundedCornerShape(14.dp),
                 onClick = { onConfirm(normalized, note.ifBlank { null }) },
             ) {
