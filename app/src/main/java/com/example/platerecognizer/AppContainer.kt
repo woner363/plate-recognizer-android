@@ -4,6 +4,7 @@ import android.content.Context
 import com.example.platerecognizer.data.AppDatabase
 import com.example.platerecognizer.data.ImageStore
 import com.example.platerecognizer.data.PlateRepository
+import com.example.platerecognizer.data.RecognitionSessionRepository
 import com.example.platerecognizer.ocr.PlateRecognizer
 
 /**
@@ -18,7 +19,10 @@ class AppContainer(context: Context) {
     private val appContext: Context = context.applicationContext
 
     val database: AppDatabase by lazy { AppDatabase.get(appContext) }
-    val repository: PlateRepository by lazy { PlateRepository(database.plateDao(), appContext) }
-    val recognizer: PlateRecognizer by lazy { PlateRecognizer(appContext) }
     val imageStore: ImageStore by lazy { ImageStore(appContext) }
+    val repository: PlateRepository by lazy { PlateRepository(database.plateDao(), appContext, imageStore) }
+    val recognizer: PlateRecognizer by lazy { PlateRecognizer(appContext) }
+    val sessionRepository: RecognitionSessionRepository by lazy {
+        RecognitionSessionRepository(database.recognitionSessionDao())
+    }
 }
