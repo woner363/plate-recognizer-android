@@ -36,7 +36,13 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
 
     val records by vm.records.collectAsStateWithLifecycle()
     val isProcessing by vm.isProcessing.collectAsStateWithLifecycle()
-    val pending by vm.pending.collectAsStateWithLifecycle()
+    val uiState by vm.uiState.collectAsStateWithLifecycle()
+
+    // 派生：当前是否有待确认对话框（AwaitingConfirmation / Saving / Discarding）
+    val pendingSession = (uiState as? RecognitionUiState.AwaitingConfirmation)?.session
+        ?: (uiState as? RecognitionUiState.Saving)?.session
+        ?: (uiState as? RecognitionUiState.Discarding)?.session
+    val isSaving = uiState is RecognitionUiState.Saving
 
     // 维持单一 ImageCapture 用例引用，供拍照按钮使用
     val imageCapture = remember { ImageCapture.Builder().build() }
@@ -61,6 +67,8 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
 
     // 修正对话框的本地状态（仅记录列表打开它，不需要持久化）
     var editing by remember { mutableStateOf<PlateRecord?>(null) }
+    // §4.10：删除确认对话框
+    var deleting by remember { mutableStateOf<PlateRecord?>(null) }
 
     // 监听 Toast（仅 Toast，确认对话框已迁到 vm.pending）
     LaunchedEffect(Unit) {
@@ -81,7 +89,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
         ) {
             AppHeader(
                 isProcessing = isProcessing,
-                hasPending = pending != null,
+                hasPending = pendingSession != null,
                 modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
             )
 
@@ -94,7 +102,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
             )
 
             CaptureActions(
-                enabled = !isProcessing && pending == null,
+                enabled = !isProcessing && pendingSession == null,
                 onCapture = { vm.capturePhotoThenRecognize { capturer.takePicture(PLATE_ROI) } },
                 onGallery = {
                     pickImage.launch(
@@ -115,7 +123,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
             RecordsList(
                 records = records,
                 onEdit = { editing = it },
-                onDelete = { vm.delete(it) },
+                onDelete = { deleting = it },  // §4.10：删除前确认，防误删
                 modifier = Modifier.fillMaxWidth().weight(1f),
             )
         }
@@ -134,13 +142,36 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
         )
     }
 
-    // 识别后的人工确认对话框——直接读 vm.pending，旋转/重建后自动恢复
-    pending?.let { p ->
+    // 识别后的人工确认对话框——由 vm.uiState 驱动，session 持久化到 Room，旋转/重建/进程恢复后仍可见
+    pendingSession?.let { p ->
         PlateInputDialog(
             title = if (p.error != null) "请确认车牌（${p.error}）" else "请确认识别结果",
-            initial = p.initial,
+            initial = p.candidate ?: "",
             onDismiss = { vm.discardPending() },
             onConfirm = { plate, note -> vm.confirmPending(plate, note) },
+            dismissEnabled = !isSaving,
+        )
+    }
+
+    // §4.10：删除确认，防止误删（删除会同时清掉图片，不可撤销）
+    deleting?.let { rec ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { androidx.compose.material3.Text("删除记录？") },
+            text = { androidx.compose.material3.Text("将删除「${rec.plateNo}」及其关联图片，无法撤销。") },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    onClick = {
+                        vm.delete(rec)
+                        deleting = null
+                    },
+                ) { androidx.compose.material3.Text("删除", color = androidx.compose.ui.graphics.Color(0xFFBA1A1A)) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { deleting = null }) {
+                    androidx.compose.material3.Text("取消")
+                }
+            },
         )
     }
 }

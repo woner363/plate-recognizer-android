@@ -33,3 +33,36 @@ interface PlateDao {
     @Query("SELECT image_uri FROM plates WHERE image_uri IS NOT NULL")
     suspend fun listAllImageUris(): List<String>
 }
+
+@Dao
+interface RecognitionSessionDao {
+
+    /** 观察唯一的活跃（非终态）session；UI 据此渲染确认对话框。 */
+    @Query(
+        """
+        SELECT * FROM recognition_sessions
+        WHERE state NOT IN ('SAVED', 'DISCARDED')
+        ORDER BY updated_at DESC
+        LIMIT 1
+        """,
+    )
+    fun observeActive(): Flow<RecognitionSessionEntity?>
+
+    @Query("SELECT * FROM recognition_sessions WHERE id = :id")
+    suspend fun getById(id: String): RecognitionSessionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(session: RecognitionSessionEntity)
+
+    @Query("DELETE FROM recognition_sessions WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    /** 列出非终态 session 引用的图片 URI，供孤儿清理保留。 */
+    @Query(
+        """
+        SELECT image_uri FROM recognition_sessions
+        WHERE state NOT IN ('SAVED', 'DISCARDED')
+        """,
+    )
+    suspend fun listActiveImageUris(): List<String>
+}

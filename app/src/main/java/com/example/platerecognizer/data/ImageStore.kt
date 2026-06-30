@@ -26,15 +26,34 @@ class ImageStore(context: Context) {
 
     /**
      * 把外部 URI 内容复制到本地 filesDir/plates/imported_*.jpg，返回本地 file:// URI。
+     *
+     * §4.9：先写 .tmp，完整复制成功后 fsync 再原子重命名；
+     * 复制中途失败会删除 .tmp，绝不留下半截文件被误认为完整图片。
      * 失败时（无权限 / 流为空）抛异常由上层处理。
      */
     suspend fun importToLocal(source: Uri): Uri = withContext(Dispatchers.IO) {
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
         val target = File(dir, "imported_$ts.jpg")
-        appContext.contentResolver.openInputStream(source)?.use { input ->
-            target.outputStream().use { output -> input.copyTo(output) }
-        } ?: error("无法读取所选图片")
-        target.toUri()
+        val tmp = File(dir, "imported_$ts.jpg.tmp")
+        try {
+            val input = appContext.contentResolver.openInputStream(source)
+                ?: error("无法读取所选图片")
+            input.use { ins ->
+                java.io.FileOutputStream(tmp).use { os ->
+                    ins.copyTo(os)
+                    os.fd.sync()  // 确保数据落盘
+                }
+            }
+            if (!tmp.renameTo(target)) {
+                // rename 失败（极少见），兜底用 copy+delete
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            target.toUri()
+        } catch (e: Throwable) {
+            tmp.delete()  // §4.9：失败清理临时文件
+            throw e
+        }
     }
 
     /**

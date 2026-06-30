@@ -2,42 +2,42 @@ package com.example.platerecognizer.data
 
 import android.content.ContentValues
 import android.content.Context
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.OutputStreamWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * 车牌记录仓储 (Repository Pattern)。
- * 业务层只依赖此接口，便于测试替换。
+ * 车牌记录仓储 (Repository Pattern)。只管正式 PlateRecord 与 CSV 导出。
  *
- * 所有阻塞 IO（文件、MediaStore）显式切到 Dispatchers.IO；
- * Room 的 suspend DAO 自身已经在 IO 线程，这里不再额外包。
+ * 图片所有权交给 [ImageStore]：删除记录时通过 [imageStore] 清理关联文件，
+ * 不再在 Repository 内重复实现边界判断（§4.9.4）。
+ *
+ * 所有阻塞 IO（MediaStore）显式切到 Dispatchers.IO；
+ * Room 的 suspend DAO 自身已在 IO 线程。
  */
 class PlateRepository(
     private val dao: PlateDao,
     private val context: Context,
+    private val imageStore: ImageStore,
 ) {
     fun observeAll(): Flow<List<PlateRecord>> = dao.observeAll()
 
     suspend fun add(
         plateNo: String,
-        confidence: Float,
+        qualityScore: Float,
         imageUri: String?,
         note: String? = null,
     ): Long {
         require(plateNo.isNotBlank()) { "plateNo 不能为空" }
         val record = PlateRecord(
             plateNo = plateNo,
-            confidence = confidence,
+            confidence = qualityScore,
             capturedAt = System.currentTimeMillis(),
             imageUri = imageUri,
             note = note,
@@ -50,15 +50,19 @@ class PlateRepository(
         dao.update(record.withCorrection(newPlate, note))
     }
 
-    /** 删除记录，同时清理 app 私有目录下关联的抓拍 JPG（相册导入的 URI 不动）。 */
+    /** 删除记录，同时通过 [imageStore] 清理 app 自有关联图片。 */
     suspend fun delete(record: PlateRecord) {
         dao.delete(record)
-        record.imageUri?.let { deleteOwnedImage(it) }
+        record.imageUri?.let { imageStore.deleteOwned(android.net.Uri.parse(it)) }
     }
 
     /**
      * 导出到「下载」目录。返回 (count, 文件名)。
-     * Android 10+ 使用 MediaStore，旧版本写入公共下载目录。
+     *
+     * §4.9：
+     * - Android 10+ 用 MediaStore IS_PENDING=1 → 写入 → IS_PENDING=0 两阶段，
+     *   写入失败时删除已创建的空条目，Downloads 不留空文件；
+     * - pre-Q 写文件失败抛异常由上层处理。
      */
     suspend fun exportCsv(): Pair<Int, String> = withContext(Dispatchers.IO) {
         val records = dao.listAll()
@@ -72,36 +76,31 @@ class PlateRepository(
                 put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
                 put(MediaStore.MediaColumns.MIME_TYPE, "text/csv")
                 put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: error("无法在 Download 目录创建文件")
-            resolver.openOutputStream(uri)?.use { os ->
-                OutputStreamWriter(os, Charsets.UTF_8).use { it.write(csv) }
-            } ?: error("无法写入文件")
+            try {
+                resolver.openOutputStream(uri)?.use { os ->
+                    os.write(csv.toByteArray(Charsets.UTF_8))
+                } ?: error("无法写入文件")
+                // 写入成功，解除 pending
+                values.clear()
+                values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+            } catch (e: Throwable) {
+                // §4.9：写入失败，删除刚创建的空条目，不留残骸
+                runCatching { resolver.delete(uri, null, null) }
+                throw e
+            }
         } else {
             @Suppress("DEPRECATION")
             val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             downloads.mkdirs()
-            val file = File(downloads, filename)
+            val file = java.io.File(downloads, filename)
             file.writeText(csv, Charsets.UTF_8)
         }
         records.size to filename
-    }
-
-    /**
-     * 仅删除 file:// 协议且位于 app filesDir 之下的图片，避免误删相册原图或外部内容。
-     */
-    private suspend fun deleteOwnedImage(imageUri: String) = withContext(Dispatchers.IO) {
-        runCatching {
-            val uri = Uri.parse(imageUri)
-            if (uri.scheme != "file") return@runCatching
-            val path = uri.path ?: return@runCatching
-            val file = File(path)
-            val ownedRoot = context.filesDir.canonicalPath
-            if (file.canonicalPath.startsWith(ownedRoot) && file.isFile) {
-                file.delete()
-            }
-        }
     }
 
     private fun buildCsv(records: List<PlateRecord>): String {
