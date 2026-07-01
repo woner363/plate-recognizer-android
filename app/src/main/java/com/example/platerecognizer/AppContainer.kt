@@ -2,6 +2,7 @@ package com.example.platerecognizer
 
 import android.content.Context
 import com.example.platerecognizer.data.AppDatabase
+import com.example.platerecognizer.data.CsvExporter
 import com.example.platerecognizer.data.ImageStore
 import com.example.platerecognizer.data.PlateRepository
 import com.example.platerecognizer.data.RecognitionSessionRepository
@@ -25,4 +26,5 @@ class AppContainer(context: Context) {
     val sessionRepository: RecognitionSessionRepository by lazy {
         RecognitionSessionRepository(database.recognitionSessionDao())
     }
+    val csvExporter: CsvExporter by lazy { CsvExporter(database.plateDao(), appContext) }
 }

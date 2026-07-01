@@ -8,11 +8,13 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.example.platerecognizer.PlateRecognizerApp
 import com.example.platerecognizer.data.ActiveSession
-import com.example.platerecognizer.data.ImageStore
-import com.example.platerecognizer.data.PlateRecord
-import com.example.platerecognizer.data.PlateRepository
-import com.example.platerecognizer.data.RecognitionSessionRepository
 import com.example.platerecognizer.data.SessionState
+import com.example.platerecognizer.domain.CsvExporter
+import com.example.platerecognizer.domain.ManagedImageStore
+import com.example.platerecognizer.domain.PlateRecords
+import com.example.platerecognizer.domain.RecognitionEngine
+import com.example.platerecognizer.domain.RecognitionSessions
+import com.example.platerecognizer.data.PlateRecord
 import com.example.platerecognizer.ocr.PlateRecognizer
 import com.example.platerecognizer.util.PlateValidator
 import kotlinx.coroutines.CancellationException
@@ -52,10 +54,11 @@ sealed interface RecognitionUiState {
 }
 
 class PlatesViewModel(
-    private val repo: PlateRepository,
-    private val recognizer: PlateRecognizer,
-    private val imageStore: ImageStore,
-    private val sessions: RecognitionSessionRepository,
+    private val repo: PlateRecords,
+    private val recognizer: RecognitionEngine,
+    private val imageStore: ManagedImageStore,
+    private val sessions: RecognitionSessions,
+    private val csvExporter: CsvExporter,
 ) : ViewModel() {
 
     val records: StateFlow<List<PlateRecord>> =
@@ -169,7 +172,7 @@ class PlatesViewModel(
         val err = if (result == null) "未检测到车牌" else PlateValidator.describeError(candidate)
         sessions.setRecognized(session.id, candidate, quality, err)
         // 同步 UI 状态到待确认
-        val updated = sessions.observeActiveSnapshot()
+        val updated = sessions.observeActive().firstOrNull()
         _uiState.value = RecognitionUiState.AwaitingConfirmation(updated ?: session)
     }
 
@@ -230,7 +233,7 @@ class PlatesViewModel(
                 throw e
             } catch (e: Exception) {
                 sessions.markAwaiting(session.id, "保存失败: ${e.message ?: "未知错误"}")
-                val restored = sessions.observeActiveSnapshot() ?: session
+                val restored = sessions.observeActive().firstOrNull() ?: session
                 _uiState.value = RecognitionUiState.AwaitingConfirmation(restored)
                 emit(UiEvent.Toast("保存失败: ${e.message ?: "未知错误"}"))
             }
@@ -258,7 +261,7 @@ class PlatesViewModel(
                 throw e
             } catch (e: Exception) {
                 sessions.markAwaiting(session.id, null)
-                val restored = sessions.observeActiveSnapshot() ?: session
+                val restored = sessions.observeActive().firstOrNull() ?: session
                 _uiState.value = RecognitionUiState.AwaitingConfirmation(restored)
                 emit(UiEvent.Toast("放弃失败: ${e.message ?: "未知错误"}"))
             }
@@ -299,7 +302,7 @@ class PlatesViewModel(
     fun exportCsv() {
         viewModelScope.launch {
             try {
-                val (count, filename) = repo.exportCsv()
+                val (count, filename) = csvExporter.exportCsv()
                 emit(UiEvent.Toast("已导出 $count 条到 Download/$filename"))
             } catch (e: CancellationException) {
                 throw e
@@ -315,10 +318,6 @@ class PlatesViewModel(
     }
 
     companion object {
-        /** 阻塞读取当前活跃 session 快照（仅用于同步 UI 恢复）。 */
-        private suspend fun RecognitionSessionRepository.observeActiveSnapshot(): ActiveSession? =
-            observeActive().firstOrNull()
-
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer<PlatesViewModel> {
                 val app = this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as PlateRecognizerApp
@@ -328,6 +327,7 @@ class PlatesViewModel(
                     recognizer = c.recognizer,
                     imageStore = c.imageStore,
                     sessions = c.sessionRepository,
+                    csvExporter = c.csvExporter,
                 )
             }
         }
