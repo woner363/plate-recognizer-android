@@ -28,7 +28,7 @@ import kotlin.coroutines.resumeWithException
  *
  * 调用方应**先把输入裁剪到取景框 ROI 区域**再喂给 [recognize]，以最大化几何过滤效果。
  */
-class PlateRecognizer(context: Context) {
+class PlateRecognizer(context: Context) : com.example.platerecognizer.domain.RecognitionEngine {
 
     private val appContext: Context = context.applicationContext
 
@@ -37,7 +37,7 @@ class PlateRecognizer(context: Context) {
 
     @Volatile private var closed = false
 
-    suspend fun recognize(uri: Uri): Recognition? {
+    override suspend fun recognize(uri: Uri): Recognition? {
         check(!closed) { "PlateRecognizer 已关闭" }
         val image = InputImage.fromFilePath(appContext, uri)
         return recognizeInput(image)

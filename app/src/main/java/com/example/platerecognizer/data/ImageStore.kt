@@ -17,7 +17,7 @@ import java.util.Locale
  * 抓拍路径已经写在 filesDir/plates 之下（[com.example.platerecognizer.camera.PhotoCapturer]），
  * 不需要再复制；只对外部 URI 走 [importToLocal]。
  */
-class ImageStore(context: Context) {
+class ImageStore(context: Context) : com.example.platerecognizer.domain.ManagedImageStore {
 
     private val appContext: Context = context.applicationContext
 
@@ -31,7 +31,7 @@ class ImageStore(context: Context) {
      * 复制中途失败会删除 .tmp，绝不留下半截文件被误认为完整图片。
      * 失败时（无权限 / 流为空）抛异常由上层处理。
      */
-    suspend fun importToLocal(source: Uri): Uri = withContext(Dispatchers.IO) {
+    override suspend fun importToLocal(source: Uri): Uri = withContext(Dispatchers.IO) {
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
         val target = File(dir, "imported_$ts.jpg")
         val tmp = File(dir, "imported_$ts.jpg.tmp")
@@ -62,7 +62,7 @@ class ImageStore(context: Context) {
      * 避免 ".." / 符号链接绕过；同时防 "/foo" 误判前缀 "/foobar"。
      * 任何不属于私有目录的 URI 静默忽略，绝不误删相册原图或 SAF 来源。
      */
-    suspend fun deleteOwned(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+    override suspend fun deleteOwned(uri: Uri): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             if (uri.scheme != "file") return@runCatching false
             val path = uri.path ?: return@runCatching false

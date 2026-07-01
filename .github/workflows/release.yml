@@ -78,10 +78,16 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
           APK=app/build/outputs/apk/debug/app-debug.apk
+          # apksigner 输出形如 "Signer #1 certificate SHA-256 digest: <64 hex>"
+          # 用 grep -oE 直接抠 64 位十六进制，避免 awk 切分字段时把字段名当值。
           CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
-            | grep "SHA-256 digest" | head -1 | awk -F: '{print $2}' | tr -d ' ')
+            | grep -oE '[a-fA-F0-9]{64}' | head -1)
+          if [ -z "$CERT" ]; then
+            echo "::error::未能从 apksigner 输出提取签名证书指纹"
+            exit 1
+          fi
           echo "APK signer SHA-256: $CERT"
-          # 期望指纹写在这里；首次 Release 后填入实际值，后续变更会触发失败。
+          # 期望指纹来自 repo variable CI_DEBUG_CERT_SHA256；未设置时跳过比对（首次发布）。
           EXPECTED="${{ vars.CI_DEBUG_CERT_SHA256 }}"
           if [ -n "$EXPECTED" ] && [ "$CERT" != "$EXPECTED" ]; then
             echo "::error::签名证书指纹不匹配（期望 $EXPECTED，实际 $CERT）"
