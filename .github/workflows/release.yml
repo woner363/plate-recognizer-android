@@ -28,46 +28,43 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # §4.1：固定 debug keystore，让连续 Release 签名一致、可覆盖升级。
-      # 首次运行生成，之后从 cache 恢复。cache key 固定，需要轮换时 bump 到 v2。
-      - name: Restore debug keystore
-        id: keystore
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/ci-debug.keystore
-          key: ci-debug-keystore-v1
-
-      - name: Generate debug keystore if missing
-        if: steps.keystore.outputs.cache-hit != 'true'
+      # §4.1：从 GitHub Secret 还原固定 debug keystore，保证连续 Release 签名一致、可覆盖升级。
+      # 之前用 actions/cache 跨 tag 不持久（tag push 触发的 run 写入 cache 不被后续 tag 读到），
+      # 改用 Secret 存 base64 keystore——每次 run 从 secret 解码，零 cache 依赖。
+      - name: Restore debug keystore from secret
+        env:
+          CI_DEBUG_KEYSTORE_BASE64: ${{ secrets.CI_DEBUG_KEYSTORE_BASE64 }}
         run: |
-          keytool -genkeypair -v \
-            -keystore ${{ runner.temp }}/ci-debug.keystore \
-            -storepass android -alias androiddebugkey -keypass android \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Plate Recognizer CI Debug, O=CI, C=US"
+          set -euo pipefail
+          if [ -z "$CI_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret CI_DEBUG_KEYSTORE_BASE64 未设置，无法签名"
+            exit 1
+          fi
+          echo "$CI_DEBUG_KEYSTORE_BASE64" | base64 -d > ${{ runner.temp }}/ci-debug.keystore
+          echo "keystore restored, size=$(wc -c < ${{ runner.temp }}/ci-debug.keystore) bytes"
 
       - name: Run unit tests
         env:
           CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
-          CI_DEBUG_KEYSTORE_PASSWORD: android
-          CI_DEBUG_KEY_ALIAS: androiddebugkey
-          CI_DEBUG_KEY_PASSWORD: android
+          CI_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.CI_DEBUG_KEYSTORE_PASSWORD }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :app:testDebugUnitTest
 
       - name: Run Android Lint
         env:
           CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
-          CI_DEBUG_KEYSTORE_PASSWORD: android
-          CI_DEBUG_KEY_ALIAS: androiddebugkey
-          CI_DEBUG_KEY_PASSWORD: android
+          CI_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.CI_DEBUG_KEYSTORE_PASSWORD }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :app:lintDebug
 
       - name: Assemble debug APK
         env:
           CI_DEBUG_KEYSTORE_PATH: ${{ runner.temp }}/ci-debug.keystore
-          CI_DEBUG_KEYSTORE_PASSWORD: android
-          CI_DEBUG_KEY_ALIAS: androiddebugkey
-          CI_DEBUG_KEY_PASSWORD: android
+          CI_DEBUG_KEYSTORE_PASSWORD: ${{ secrets.CI_DEBUG_KEYSTORE_PASSWORD }}
+          CI_DEBUG_KEY_ALIAS: ${{ secrets.CI_DEBUG_KEY_ALIAS }}
+          CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
       # §4.1：校验签名证书指纹，与预期一致才继续发布。
