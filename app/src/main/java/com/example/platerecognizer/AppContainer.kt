@@ -10,10 +10,11 @@ import com.example.platerecognizer.ocr.PlateRecognizer
 
 /**
  * 极简服务定位器：单文件、零依赖。
- * 由 [PlateRecognizerApp] 在 onCreate 时构造一次，组件通过它取依赖；
- * 单元/Instrumentation 测试可以直接 new 一个并替换字段（开放为 var 即可）。
+ * 由 [PlateRecognizerApp] 在 onCreate 时构造一次，组件通过它取依赖。
  *
- * 选择不用 Hilt：本工程依赖少、ViewModel 仅 1 个，编译时注解处理器代价不划算。
+ * §4.8：字段为 `val`（不可变），生产环境不可替换；测试时直接构造 ViewModel
+ * 传入 fake 接口即可，不需要替换 container。不引入 Hilt——本工程依赖少、
+ * ViewModel 仅 1 个，编译时注解处理器代价不划算。
  */
 class AppContainer(context: Context) {
 
