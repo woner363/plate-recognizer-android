@@ -67,7 +67,7 @@ jobs:
           CI_DEBUG_KEY_PASSWORD: ${{ secrets.CI_DEBUG_KEY_PASSWORD }}
         run: ./gradlew --no-daemon :app:assembleDebug
 
-      # §4.1：校验签名证书指纹，与预期一致才继续发布。
+      # §4.1/§4.10：校验签名证书指纹，与预期一致才继续发布。指纹变量必须存在，不跳过。
       - name: Verify signing certificate
         env:
           ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
@@ -75,8 +75,6 @@ jobs:
           set -euo pipefail
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
           APK=app/build/outputs/apk/debug/app-debug.apk
-          # apksigner 输出形如 "Signer #1 certificate SHA-256 digest: <64 hex>"
-          # 用 grep -oE 直接抠 64 位十六进制，避免 awk 切分字段时把字段名当值。
           CERT=$("$BUILD_TOOLS/apksigner" verify --print-certs "$APK" \
             | grep -oE '[a-fA-F0-9]{64}' | head -1)
           if [ -z "$CERT" ]; then
@@ -84,13 +82,32 @@ jobs:
             exit 1
           fi
           echo "APK signer SHA-256: $CERT"
-          # 期望指纹来自 repo variable CI_DEBUG_CERT_SHA256；未设置时跳过比对（首次发布）。
           EXPECTED="${{ vars.CI_DEBUG_CERT_SHA256 }}"
-          if [ -n "$EXPECTED" ] && [ "$CERT" != "$EXPECTED" ]; then
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::repo variable CI_DEBUG_CERT_SHA256 未设置，拒绝发布（§4.10）"
+            exit 1
+          fi
+          if [ "$CERT" != "$EXPECTED" ]; then
             echo "::error::签名证书指纹不匹配（期望 $EXPECTED，实际 $CERT）"
             exit 1
           fi
           echo "cert_sha256=$CERT" >> "$GITHUB_ENV"
+
+      # §4.10：校验 APK versionName 与 Tag 一致，防止版本号与发布 tag 脱节。
+      - name: Verify version matches tag
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          VERSION_NAME=$("$BUILD_TOOLS/aapt2" dump badging "$APK" | grep -oE "versionName='[^']+'" | head -1 | sed "s/versionName='//;s/'//")
+          echo "APK versionName: $VERSION_NAME ; Tag: $TAG"
+          if [ "$VERSION_NAME" != "$TAG" ]; then
+            echo "::error::APK versionName ($VERSION_NAME) 与 Tag ($TAG) 不一致（§4.10）"
+            exit 1
+          fi
 
       - name: Stage artifacts
         id: stage

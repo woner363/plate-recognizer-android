@@ -60,7 +60,7 @@ class CsvExporter(
         /**
          * 纯函数：CSV 编码 + 转义 + 公式注入防御。不依赖 DAO/Context，便于 JVM 单测。
          * - BOM (U+FEFF) 兼容 Excel（用转义字面量避免 lint ByteOrderMark 警告）；
-         * - confidence 用 Locale.US，避免地区差异撕裂列；
+         * - qualityScore 用 Locale.US，避免地区差异撕裂列；
          * - 含 , " \r \n 的字段加双引号、内部双引号翻倍；
          * - 以 = + - @ \t \r 开头的字段前置 ' 中和公式注入。
          */
@@ -68,11 +68,11 @@ class CsvExporter(
             val df = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             val sb = StringBuilder()
             sb.append('\uFEFF')
-            sb.append("ID,车牌号,置信度,拍摄时间,图片URI,已修正,备注\n")
+            sb.append("ID,车牌号,候选质量分,拍摄时间,图片URI,已修正,备注\n")
             for (r in records) {
                 sb.append(r.id).append(',')
                   .append(escape(r.plateNo)).append(',')
-                  .append(String.format(Locale.US, "%.2f", r.confidence)).append(',')
+                  .append(String.format(Locale.US, "%.2f", r.qualityScore)).append(',')
                   .append(escape(df.format(Date(r.capturedAt)))).append(',')
                   .append(escape(r.imageUri ?: "")).append(',')
                   .append(if (r.corrected) "是" else "否").append(',')

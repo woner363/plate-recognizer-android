@@ -149,7 +149,7 @@ class PlatesViewModelTest {
             bySession[sessionId]?.let { return it.id }
             added += plateNo
             val rec = PlateRecord(id = added.size.toLong(), plateNo = plateNo,
-                confidence = qualityScore, capturedAt = 0L, imageUri = imageUri,
+                qualityScore = qualityScore, capturedAt = 0L, imageUri = imageUri,
                 note = note, sourceSessionId = sessionId)
             bySession[sessionId] = rec
             return rec.id

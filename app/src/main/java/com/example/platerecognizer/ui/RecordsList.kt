@@ -148,7 +148,7 @@ private fun RecordCard(
                     }
                 }
 
-                QualityBadge(record.confidence)
+                QualityBadge(record.qualityScore)
                 IconButton(onClick = { onEdit(record) }) {
                     Icon(
                         imageVector = Icons.Default.Edit,

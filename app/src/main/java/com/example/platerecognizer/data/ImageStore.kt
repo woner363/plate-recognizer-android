@@ -32,9 +32,10 @@ class ImageStore(context: Context) : com.example.platerecognizer.domain.ManagedI
      * 失败时（无权限 / 流为空）抛异常由上层处理。
      */
     override suspend fun importToLocal(source: Uri): Uri = withContext(Dispatchers.IO) {
-        val ts = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
-        val target = File(dir, "imported_$ts.jpg")
-        val tmp = File(dir, "imported_$ts.jpg.tmp")
+        // §4.11：用 UUID 命名，避免毫秒时间戳在并发导入时碰撞
+        val uid = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        val target = File(dir, "imported_$uid.jpg")
+        val tmp = File(dir, "imported_$uid.jpg.tmp")
         try {
             val input = appContext.contentResolver.openInputStream(source)
                 ?: error("无法读取所选图片")

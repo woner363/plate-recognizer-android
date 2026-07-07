@@ -24,8 +24,15 @@ data class PlateRecord(
     @ColumnInfo(name = "plate_no")
     val plateNo: String,
 
+    /**
+     * 候选质量分（0..1）。**不是** ML Kit 模型置信度，而是格式合法性 + 长度常见度的
+     * 启发式排序分，仅用于候选排序与 UI 提示。
+     *
+     * §4.8：Kotlin 字段名改为 qualityScore；DB 列名保留 confidence 兼容旧 schema，
+     * 后续 Migration 再正式迁移列名。
+     */
     @ColumnInfo(name = "confidence")
-    val confidence: Float,
+    val qualityScore: Float,
 
     /** 拍摄时间，毫秒时间戳。 */
     @ColumnInfo(name = "captured_at")
