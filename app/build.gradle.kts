@@ -17,8 +17,8 @@ android {
         targetSdk = 34
         // 版本号与 GitHub Release tag 对齐：versionCode 单调递增，
         // versionName 形如 "0.2.4-debug"。改版本时记得同步发对应 tag。
-        versionCode = 27
-        versionName = "0.2.7-debug"
+        versionCode = 28
+        versionName = "0.2.8-debug"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }
