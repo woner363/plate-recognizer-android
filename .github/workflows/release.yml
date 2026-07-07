@@ -103,9 +103,11 @@ jobs:
           BUILD_TOOLS=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
           APK=app/build/outputs/apk/debug/app-debug.apk
           VERSION_NAME=$("$BUILD_TOOLS/aapt2" dump badging "$APK" | grep -oE "versionName='[^']+'" | head -1 | sed "s/versionName='//;s/'//")
-          echo "APK versionName: $VERSION_NAME ; Tag: $TAG"
-          if [ "$VERSION_NAME" != "$TAG" ]; then
-            echo "::error::APK versionName ($VERSION_NAME) 与 Tag ($TAG) 不一致（§4.10）"
+          # Tag 形如 v0.2.8-debug，versionName 形如 0.2.8-debug；去掉 tag 的 v 前缀再比对
+          TAG_VERSION="${TAG#v}"
+          echo "APK versionName: $VERSION_NAME ; Tag: $TAG (normalized: $TAG_VERSION)"
+          if [ "$VERSION_NAME" != "$TAG_VERSION" ]; then
+            echo "::error::APK versionName ($VERSION_NAME) 与 Tag ($TAG_VERSION) 不一致（§4.10）"
             exit 1
           fi
 
