@@ -56,6 +56,8 @@ internal fun CameraPreviewCard(
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     var cameraError by remember { mutableStateOf<String?>(null) }
+    // §4.9：保存本页面绑定的 UseCase，onDispose 时只解绑自有，不用 unbindAll 影响其他用例
+    val boundPreview = remember { mutableStateOf<Preview?>(null) }
 
     Surface(
         modifier = modifier,
@@ -76,10 +78,11 @@ internal fun CameraPreviewCard(
                                     it.setSurfaceProvider(previewView.surfaceProvider)
                                 }
                                 val selector = CameraSelector.DEFAULT_BACK_CAMERA
-                                // §4.7：doOnLayout 确保 ViewPort 已就绪再绑定，不永久降级。
+                                // §4.9：doOnLayout 确保 ViewPort 已就绪再绑定。
                                 previewView.doOnLayout {
                                     try {
-                                        provider.unbindAll()
+                                        // 只解绑本页面之前绑定的，不用 unbindAll
+                                        boundPreview.value?.let { provider.unbind(it, imageCapture) }
                                         val viewPort = previewView.viewPort
                                         val group = UseCaseGroup.Builder()
                                             .addUseCase(preview)
@@ -87,6 +90,7 @@ internal fun CameraPreviewCard(
                                             .apply { viewPort?.let { vp -> setViewPort(vp) } }
                                             .build()
                                         provider.bindToLifecycle(lifecycleOwner, selector, group)
+                                        boundPreview.value = preview
                                         cameraError = null
                                     } catch (e: Exception) {
                                         cameraError = "相机绑定失败：${e.message ?: "未知错误"}"
@@ -101,13 +105,16 @@ internal fun CameraPreviewCard(
                 modifier = Modifier.fillMaxSize(),
             )
 
-            // §4.7：Composable 移除时解绑相机，释放硬件资源，避免"相机已被占用"。
+            // §4.9：Composable 移除时只解绑本页面自有 UseCase，不影响同进程其他 CameraX 用例。
             val disposeContext = LocalContext.current
             DisposableEffect(disposeContext) {
                 onDispose {
+                    val previewToUnbind = boundPreview.value
                     val providerFuture = ProcessCameraProvider.getInstance(disposeContext)
                     providerFuture.addListener({
-                        runCatching { providerFuture.get().unbindAll() }
+                        runCatching {
+                            previewToUnbind?.let { providerFuture.get().unbind(it, imageCapture) }
+                        }
                     }, ContextCompat.getMainExecutor(disposeContext))
                 }
             }

@@ -2,6 +2,7 @@ package com.example.platerecognizer.data
 
 import androidx.room.withTransaction
 import com.example.platerecognizer.domain.PlateRecords
+import com.example.platerecognizer.util.PlateValidator
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -30,10 +31,11 @@ class PlateRepository(
         imageUri: String?,
         note: String?,
     ): Long {
-        require(plateNo.isNotBlank()) { "plateNo 不能为空" }
+        // §4.11：业务边界强制校验，非 UI 调用也无法写入非法车牌
+        require(PlateValidator.isValid(plateNo)) { "plateNo 格式非法: $plateNo" }
         val record = PlateRecord(
             plateNo = plateNo,
-            confidence = qualityScore,
+            qualityScore = qualityScore,
             capturedAt = System.currentTimeMillis(),
             imageUri = imageUri,
             note = note,
@@ -54,6 +56,8 @@ class PlateRepository(
         imageUri: String?,
         note: String?,
     ): Long = db.withTransaction {
+        // §4.11：业务边界强制校验
+        require(PlateValidator.isValid(plateNo)) { "plateNo 格式非法: $plateNo" }
         // 先查幂等：session 已 SAVED → 返回既有记录
         val existingRecord = plateDao.findBySourceSessionId(sessionId)
         if (existingRecord != null) {
@@ -72,7 +76,7 @@ class PlateRepository(
         }
         val record = PlateRecord(
             plateNo = plateNo,
-            confidence = qualityScore,
+            qualityScore = qualityScore,
             capturedAt = System.currentTimeMillis(),
             imageUri = imageUri,
             note = note,
@@ -85,7 +89,8 @@ class PlateRepository(
         plateDao.findBySourceSessionId(sessionId)
 
     override suspend fun applyCorrection(record: PlateRecord, newPlate: String, note: String?) {
-        require(newPlate.isNotBlank()) { "修正后的车牌不能为空" }
+        // §4.11：业务边界强制校验
+        require(PlateValidator.isValid(newPlate)) { "修正后的车牌格式非法: $newPlate" }
         plateDao.update(record.withCorrection(newPlate, note))
     }
 
