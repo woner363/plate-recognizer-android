@@ -34,24 +34,36 @@
 
 ```
 app/src/main/java/com/example/platerecognizer/
-├── MainActivity.kt              # 入口 + 权限门
+├── MainActivity.kt                      # 入口 + 权限门
+├── AppContainer.kt                      # 手动 DI 服务定位器
+├── PlateRecognizerApp.kt                # Application，启动孤儿清理
 ├── data/
-│   ├── PlateRecord.kt           # @Entity 数据类（不可变更新 copy/withCorrection）
-│   ├── PlateDao.kt              # Room DAO，Flow 观察
-│   ├── AppDatabase.kt           # Room Database 单例
-│   └── PlateRepository.kt       # Repository Pattern + CSV 导出 (MediaStore)
+│   ├── PlateRecord.kt                   # @Entity 正式记录（含 sourceSessionId）
+│   ├── PlateDao.kt                      # PlateDao + RecognitionSessionDao（expected-state 原子迁移）
+│   ├── AppDatabase.kt                   # Room Database v3 + Migration 1→2→3
+│   ├── PlateRepository.kt               # PlateRecords 实现，事务性 confirmSession
+│   ├── RecognitionSessionEntity.kt      # @Entity 识别 session 状态机
+│   ├── RecognitionSessionRepository.kt  # RecognitionSessions 实现
+│   ├── ImageStore.kt                    # ManagedImageStore 实现，.tmp+fsync+rename 导入
+│   └── CsvExporter.kt                   # CsvExporter 实现，MediaStore IS_PENDING
+├── domain/
+│   └── Contracts.kt                     # 业务层最小接口（PlateRecords/RecognitionEngine/...）
 ├── ocr/
-│   ├── Recognition.kt           # 识别结果值对象
-│   └── PlateRecognizer.kt       # ML Kit 包装 + 车牌候选筛选
+│   ├── Recognition.kt                   # 识别结果值对象（qualityScore，非模型概率）
+│   └── PlateRecognizer.kt               # ML Kit 包装 + 车牌候选筛选
 ├── camera/
-│   └── PhotoCapturer.kt         # CameraX 拍照助手（suspend）
+│   └── PhotoCapturer.kt                 # CameraX 拍照助手（suspend，ROI 裁剪）
 ├── ui/
-│   ├── MainScreen.kt            # 主屏（预览 + 按钮 + 列表）
-│   ├── RecordsList.kt           # 卡片列表 + 修正/删除按钮
-│   ├── PlateInputDialog.kt      # 输入对话框（实时校验）
-│   └── PlatesViewModel.kt       # MVVM 状态机
-└── util/
-    └── PlateValidator.kt        # 中国车牌格式校验（与 Python 版等价）
+│   ├── MainScreen.kt                    # 主屏（预览 + 按钮 + 列表）
+│   ├── CameraPreviewCard.kt             # 相机预览 + 取景框（ViewPort + 释放）
+│   ├── DashboardComponents.kt           # 状态药丸 + 操作按钮组件
+│   ├── RecordsList.kt                   # 卡片列表 + 修正/删除
+│   ├── PlateInputDialog.kt              # 输入对话框（实时校验 + rememberSaveable）
+│   └── PlatesViewModel.kt               # MVVM 状态机（RecognitionUiState 单一权威源）
+├── util/
+│   └── PlateValidator.kt                # 中国车牌格式校验（GA 36-2018）
+└── ui/theme/
+    └── Theme.kt                         # Material 3 + Material You 动态取色
 ```
 
 ## 构建运行
@@ -62,7 +74,7 @@ app/src/main/java/com/example/platerecognizer/
 cd plate-recognizer-android
 ./gradlew :app:assembleDebug          # 输出 app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:installDebug           # 安装到已连接的设备
-./gradlew :app:test                   # 运行单元测试
+./gradlew :app:test                   # 运行 JVM 单元测试（44 个）
 ```
 
 > 首次构建会从 Maven Central / Google 仓库下载依赖，需要网络。
@@ -79,12 +91,13 @@ cd plate-recognizer-android
 | `src/camera.py` (OpenCV) | `camera/PhotoCapturer.kt` (CameraX) |
 | `src/gui.py` (Tkinter) | `ui/MainScreen.kt` (Compose) |
 
-## 设计要点（与全局 coding-style 一致）
+## 设计要点
 
 - ✅ **不可变更新**：`PlateRecord` 是 data class，更新走 `copy()` / `withCorrection()`，不就地修改
-- ✅ **小文件高内聚**：每个 Kotlin 文件 < 250 行，按职责分包
-- ✅ **Repository Pattern**：业务只依赖 `PlateRepository`，便于替换/测试
-- ✅ **显式错误处理**：所有 OCR / IO / DB 调用均 try-catch，UI 用 Toast 反馈
-- ✅ **输入校验**：所有手动输入车牌均经过 `PlateValidator.describeError()`
-- ✅ **协程**：CameraX / ML Kit 回调封装为 `suspendCancellableCoroutine`
-- ✅ **测试**：纯 JVM 测试覆盖校验器；Room 与 OCR 部分留作 Instrumentation Test
+- ✅ **单一状态源**：`PlatesViewModel.uiState` 由 Room session Flow + transient 覆盖 combine 而成，不双源覆盖
+- ✅ **expected-state 原子迁移**：session 状态机用 `WHERE state=expected` SQL，DB 层 CAS 防并发
+- ✅ **幂等进程恢复**：`sourceSessionId` 唯一索引 + 事务性 confirmSession + 启动按状态补偿
+- ✅ **Repository Pattern + 接口隔离**：domain 层最小接口，ViewModel 依赖抽象，便于 fake 测试
+- ✅ **业务边界强制校验**：Repository.add/confirmSession/applyCorrection 都调 PlateValidator.isValid
+- ✅ **显式错误处理**：所有 OCR / IO / DB 调用均 try-catch 且重抛 CancellationException，UI 用 Toast 反馈
+- ✅ **测试**：44 个 JVM 测试覆盖校验器 / OCR 候选 / CSV 编码 / 孤儿清理 / ViewModel 状态机

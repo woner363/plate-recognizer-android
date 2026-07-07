@@ -17,16 +17,16 @@ import kotlin.coroutines.resumeWithException
  * 基于 ML Kit 中文文本识别的车牌 OCR。
  *
  * 识别策略（与 [GA 36-2018] 协同）：
- *  1. **空间过滤**：只接受 boundingBox 形状像号牌的 TextBlock —— 宽高比落在
- *     [2.6, 3.8]（440×140=3.14 与 480×140=3.43 的兼容窗），且面积占比 ≥ 2%。
- *     这一步直接把广告牌、车架号、店招、路标过滤掉。
- *  2. **字符集过滤**：滑窗只接受能通过 [PlateValidator.isValid] 的子串
- *     （即包含 31 省白名单、发牌机关白名单、I/O 排除、新能源字母位约束）。
- *  3. **同起点截断剔除**：同一起点既能拼成合法 7 位又能拼成合法 8 位时，
+ *  1. **字符集过滤**：滑窗只接受能通过 [PlateValidator.isValid] 的子串
+ *     （31 省白名单、发牌机关白名单、I/O 排除、新能源字母位约束）。
+ *  2. **同起点截断剔除**：同一起点既能拼成合法 7 位又能拼成合法 8 位时，
  *     视为新能源 8 位，避免被截断。
- *  4. **评分**：偏向 7 位 + 字母数字混合更常见，作为多候选时的排序依据。
+ *  3. **评分**：偏向 7 位 + 字母数字混合更常见，作为多候选时的排序依据。
+ *  4. **几何加权**：TextBlock 宽高比 ∈ [2.0, 5.0] / 面积 ≥ 1% 时给 qualityScore
+ *     加权，但**不硬淘汰**——ML Kit boundingBox 是文字框非车牌外框，硬过滤会误杀。
+ *     空间过滤主要交给取景框 ROI 裁剪完成。
  *
- * 调用方应**先把输入裁剪到取景框 ROI 区域**再喂给 [recognize]，以最大化几何过滤效果。
+ * 调用方应**先把输入裁剪到取景框 ROI 区域**再喂给 [recognize]。
  */
 class PlateRecognizer(context: Context) : com.example.platerecognizer.domain.RecognitionEngine {
 
