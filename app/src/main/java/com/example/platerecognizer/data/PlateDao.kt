@@ -33,6 +33,10 @@ interface PlateDao {
     /** 列出所有非空 image_uri，供启动时孤儿文件扫描使用。 */
     @Query("SELECT image_uri FROM plates WHERE image_uri IS NOT NULL")
     suspend fun listAllImageUris(): List<String>
+
+    /** §4.3：按 sourceSessionId 查询是否已入库（幂等恢复用）。 */
+    @Query("SELECT * FROM plates WHERE source_session_id = :sessionId LIMIT 1")
+    suspend fun findBySourceSessionId(sessionId: String): PlateRecord?
 }
 
 @Dao

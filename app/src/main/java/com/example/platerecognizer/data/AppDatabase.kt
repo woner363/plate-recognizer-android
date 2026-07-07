@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [PlateRecord::class, RecognitionSessionEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,14 +28,11 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "plates.db",
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build().also { instance = it }
             }
 
-        /**
-         * §4.5：v1 → v2 新增 recognition_sessions 表。
-         * 旧 plates 表无结构变化，仅 CREATE 新表。
-         */
+        /** §4.5：v1 → v2 新增 recognition_sessions 表。 */
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
@@ -52,6 +49,19 @@ abstract class AppDatabase : RoomDatabase() {
                         PRIMARY KEY(`id`)
                     )
                     """.trimIndent(),
+                )
+            }
+        }
+
+        /**
+         * §4.3：v2 → v3 给 plates 表加 source_session_id 列 + 唯一索引。
+         * 用于幂等保存：进程在 SAVING 中断后恢复时判断 session 是否已入库。
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE plates ADD COLUMN source_session_id TEXT")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_plates_source_session_id` ON `plates` (`source_session_id`)",
                 )
             }
         }

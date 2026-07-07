@@ -20,6 +20,21 @@ interface PlateRecords {
     suspend fun add(plateNo: String, qualityScore: Float, imageUri: String?, note: String? = null): Long
     suspend fun applyCorrection(record: PlateRecord, newPlate: String, note: String?)
     suspend fun delete(record: PlateRecord)
+
+    /**
+     * §4.3：事务性确认——插入记录 + 标记 session SAVED，幂等。
+     * 返回 PlateRecord id；session 状态冲突时抛异常。
+     */
+    suspend fun confirmSession(
+        sessionId: String,
+        plateNo: String,
+        qualityScore: Float,
+        imageUri: String?,
+        note: String?,
+    ): Long
+
+    /** §4.3：按 sourceSessionId 查询是否已入库（启动恢复用）。 */
+    suspend fun findBySourceSessionId(sessionId: String): PlateRecord?
 }
 
 /** 车牌 OCR 引擎。 */
