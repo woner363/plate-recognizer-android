@@ -112,6 +112,48 @@ class PlatesViewModel(
         _events.trySend(event)
     }
 
+    /**
+     * §4.3：启动恢复补偿。扫描所有非终态 session，按原状态执行幂等补偿：
+     *
+     * - SAVING：查 sourceSessionId 是否已入库；已入库则完成 session，否则回退 Awaiting 重试
+     * - DISCARDING：继续删除图片并完成 session（不恢复保存入口）
+     * - CAPTURING/RECOGNIZING：转为 FAILED（无法安全续跑 OCR）
+     * - AWAITING_CONFIRMATION：正常恢复，无需处理
+     *
+     * 配合 §4.5 单活跃 session 保证，这里通常只有 0 或 1 条。
+     */
+    init {
+        viewModelScope.launch {
+            val nonTerminal = sessions.listAllNonTerminal()
+            for (s in nonTerminal) {
+                when (s.state) {
+                    SessionState.SAVING -> {
+                        // 幂等：sourceSessionId 已入库则完成，否则回退待确认
+                        val existing = repo.findBySourceSessionId(s.id)
+                        if (existing != null) {
+                            sessions.markSaved(s.id)
+                            sessions.delete(s.id)
+                        } else {
+                            sessions.revertToAwaiting(s.id, "上次保存未完成，请重试")
+                        }
+                    }
+                    SessionState.DISCARDING -> {
+                        // 继续完成放弃：删图 + 标记 DISCARDED
+                        runCatching { imageStore.deleteOwnedString(s.imageUri) }
+                        sessions.markDiscarded(s.id)
+                        sessions.delete(s.id)
+                    }
+                    SessionState.CAPTURING, SessionState.RECOGNIZING -> {
+                        // 无法安全续跑 OCR（图片可能在但 OCR 结果丢失），标记 FAILED
+                        sessions.markFailed(s.id, "上次识别未完成")
+                    }
+                    SessionState.AWAITING_CONFIRMATION, SessionState.FAILED -> Unit
+                    SessionState.SAVED, SessionState.DISCARDED -> Unit
+                }
+            }
+        }
+    }
+
     /** 串行闸门：同一时刻只允许一个识别任务。 */
     private val recognitionMutex = Mutex()
 
@@ -260,8 +302,14 @@ class PlatesViewModel(
                 return@launch
             }
             try {
-                repo.add(normalized, session.qualityScore ?: 0f, session.imageUri, note)
-                sessions.markSaved(session.id)
+                // §4.3：事务性确认（插入记录 + 标记 SAVED），幂等——中断重试不重复
+                repo.confirmSession(
+                    sessionId = session.id,
+                    plateNo = normalized,
+                    qualityScore = session.qualityScore ?: 0f,
+                    imageUri = session.imageUri,
+                    note = note,
+                )
                 sessions.delete(session.id)
                 emit(UiEvent.Toast("已保存: $normalized"))
             } catch (e: CancellationException) {

@@ -21,7 +21,9 @@ class AppContainer(context: Context) {
 
     val database: AppDatabase by lazy { AppDatabase.get(appContext) }
     val imageStore: ImageStore by lazy { ImageStore(appContext) }
-    val repository: PlateRepository by lazy { PlateRepository(database.plateDao(), appContext, imageStore) }
+    val repository: PlateRepository by lazy {
+        PlateRepository(database, database.plateDao(), database.recognitionSessionDao(), imageStore)
+    }
     val recognizer: PlateRecognizer by lazy { PlateRecognizer(appContext) }
     val sessionRepository: RecognitionSessionRepository by lazy {
         RecognitionSessionRepository(database.recognitionSessionDao())

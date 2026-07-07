@@ -134,12 +134,27 @@ class PlatesViewModelTest {
     private class FakeRecords : PlateRecords {
         val added = mutableListOf<String>()
         private val flow = MutableSharedFlow<List<PlateRecord>>(replay = 1)
+        private val bySession = mutableMapOf<String, PlateRecord>()
         init { flow.tryEmit(emptyList()) }
         override fun observeAll(): Flow<List<PlateRecord>> = flow.asSharedFlow()
         override suspend fun add(plateNo: String, qualityScore: Float, imageUri: String?, note: String?): Long {
             added += plateNo
             return added.size.toLong()
         }
+        override suspend fun confirmSession(
+            sessionId: String, plateNo: String, qualityScore: Float,
+            imageUri: String?, note: String?,
+        ): Long {
+            // 模拟真实事务：若已入库则幂等返回
+            bySession[sessionId]?.let { return it.id }
+            added += plateNo
+            val rec = PlateRecord(id = added.size.toLong(), plateNo = plateNo,
+                confidence = qualityScore, capturedAt = 0L, imageUri = imageUri,
+                note = note, sourceSessionId = sessionId)
+            bySession[sessionId] = rec
+            return rec.id
+        }
+        override suspend fun findBySourceSessionId(sessionId: String): PlateRecord? = bySession[sessionId]
         override suspend fun applyCorrection(record: PlateRecord, newPlate: String, note: String?) {}
         override suspend fun delete(record: PlateRecord) {}
     }
