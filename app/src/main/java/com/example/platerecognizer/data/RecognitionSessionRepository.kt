@@ -2,15 +2,17 @@ package com.example.platerecognizer.data
 
 import com.example.platerecognizer.domain.RecognitionSessions
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 /**
  * RecognitionSession 的访问层，封装 [RecognitionSessionDao]。
  *
- * 暴露给 ViewModel 的是领域化的 API（创建、迁移状态、清理），不直接暴露 Entity。
- * 活跃 session 通过 [observeActive] 以 [ActiveSession] 值对象形式观察。
- *
- * 实现 [RecognitionSessions] 接口（§4.8），便于注入 fake 测试。
+ * §4.4：所有状态迁移用 expected-state 原子 SQL，返回 Boolean；
+ * §4.5：createCapturing 在事务里把现存非终态 session 标记为 DISCARDED，
+ * 保证任意时刻最多一个活跃 session；
+ * id 用 UUID 避免进程重启后的碰撞。
  */
 class RecognitionSessionRepository(
     private val dao: RecognitionSessionDao,
@@ -22,7 +24,7 @@ class RecognitionSessionRepository(
     override suspend fun createCapturing(imageUri: String): ActiveSession {
         val now = System.currentTimeMillis()
         val entity = RecognitionSessionEntity(
-            id = generateId(),
+            id = UUID.randomUUID().toString(),
             state = SessionState.CAPTURING,
             candidate = null,
             qualityScore = null,
@@ -31,44 +33,97 @@ class RecognitionSessionRepository(
             createdAt = now,
             updatedAt = now,
         )
-        dao.upsert(entity)
+        dao.createCapturingClosingOthers(entity)
         return entity.toActive()
     }
 
-    override suspend fun transition(id: String, state: SessionState, transform: (RecognitionSessionEntity) -> RecognitionSessionEntity) {
-        val current = dao.getById(id) ?: return
-        val updated = transform(current).copy(state = state, updatedAt = System.currentTimeMillis())
-        dao.upsert(updated)
-    }
+    /** CAPTURING → RECOGNIZING。 */
+    override suspend fun beginRecognizing(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.CAPTURING,
+        nextState = SessionState.RECOGNIZING,
+        updatedAt = now(),
+    ) == 1
 
-    override suspend fun setRecognized(id: String, candidate: String, qualityScore: Float, error: String?) {
-        transition(id, SessionState.AWAITING_CONFIRMATION) {
-            it.copy(candidate = candidate, qualityScore = qualityScore, error = error)
+    override suspend fun setRecognized(
+        id: String,
+        candidate: String,
+        qualityScore: Float,
+        error: String?,
+    ): Boolean = dao.setRecognizedIf(
+        id,
+        expectedState = SessionState.RECOGNIZING,
+        nextState = SessionState.AWAITING_CONFIRMATION,
+        candidate = candidate,
+        qualityScore = qualityScore,
+        error = error,
+        updatedAt = now(),
+    ) == 1
+
+    /** AWAITING_CONFIRMATION → SAVING。保存入口的 CAS。 */
+    override suspend fun beginSaving(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.AWAITING_CONFIRMATION,
+        nextState = SessionState.SAVING,
+        updatedAt = now(),
+    ) == 1
+
+    /** SAVING → AWAITING_CONFIRMATION（保存失败回退），保留 candidate/qualityScore。 */
+    override suspend fun revertToAwaiting(id: String, error: String?): Boolean = dao.revertToAwaitingIf(
+        id,
+        expectedState = SessionState.SAVING,
+        nextState = SessionState.AWAITING_CONFIRMATION,
+        error = error,
+        updatedAt = now(),
+    ) == 1
+
+    override suspend fun markSaved(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.SAVING,
+        nextState = SessionState.SAVED,
+        updatedAt = now(),
+    ) == 1
+
+    /** AWAITING_CONFIRMATION → DISCARDING。放弃入口的 CAS。 */
+    override suspend fun beginDiscarding(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.AWAITING_CONFIRMATION,
+        nextState = SessionState.DISCARDING,
+        updatedAt = now(),
+    ) == 1
+
+    override suspend fun markDiscarded(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.DISCARDING,
+        nextState = SessionState.DISCARDED,
+        updatedAt = now(),
+    ) == 1
+
+    override suspend fun markFailed(id: String, error: String?): Boolean {
+        // 任意非终态 → FAILED；用逐个尝试常见 expected state 的方式（简单但够用）
+        for (expected in listOf(
+            SessionState.CAPTURING,
+            SessionState.RECOGNIZING,
+            SessionState.AWAITING_CONFIRMATION,
+            SessionState.SAVING,
+            SessionState.DISCARDING,
+        )) {
+            if (dao.transitionIf(id, expected, SessionState.FAILED, now()) == 1) return true
         }
-    }
-
-    override suspend fun markAwaiting(id: String, error: String?) {
-        transition(id, SessionState.AWAITING_CONFIRMATION) {
-            it.copy(error = error)
-        }
-    }
-
-    override suspend fun markSaved(id: String) {
-        transition(id, SessionState.SAVED)
-    }
-
-    override suspend fun markDiscarded(id: String) {
-        transition(id, SessionState.DISCARDED)
-    }
-
-    override suspend fun markFailed(id: String, error: String?) {
-        transition(id, SessionState.FAILED) { it.copy(error = error) }
+        return false
     }
 
     override suspend fun delete(id: String) = dao.deleteById(id)
 
-    /** 非终态 session 引用的图片 URI（孤儿清理保留）。 */
     override suspend fun listActiveImageUris(): List<String> = dao.listActiveImageUris()
+
+    override suspend fun listAllNonTerminal(): List<ActiveSession> =
+        dao.listAllNonTerminal().map { it.toActive() }
+
+    override suspend fun snapshotActive(): ActiveSession? =
+        dao.observeActive().firstOrNull()?.toActive()
+
+    private fun now(): Long = System.currentTimeMillis()
 
     private fun RecognitionSessionEntity.toActive(): ActiveSession = ActiveSession(
         id = id,
@@ -79,16 +134,6 @@ class RecognitionSessionRepository(
         error = error,
         createdAt = createdAt,
     )
-
-    @Synchronized
-    private fun generateId(): String {
-        counter = (counter + 1) and 0xFFFF
-        return "${System.currentTimeMillis()}-${counter.toString(16)}"
-    }
-
-    private var counter = 0
-
-    companion object
 }
 
 /** ViewModel 使用的活跃 session 值对象（脱离 Room Entity）。 */
@@ -101,6 +146,5 @@ data class ActiveSession(
     val error: String?,
     val createdAt: Long,
 ) {
-    /** UI 判断是否处于人工确认阶段。 */
     val isAwaitingConfirmation: Boolean get() = state == SessionState.AWAITING_CONFIRMATION
 }

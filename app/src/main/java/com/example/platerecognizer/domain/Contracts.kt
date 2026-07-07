@@ -1,14 +1,17 @@
 package com.example.platerecognizer.domain
 
 import android.net.Uri
+import com.example.platerecognizer.data.ActiveSession
 import com.example.platerecognizer.data.PlateRecord
+import com.example.platerecognizer.data.SessionState
 import kotlinx.coroutines.flow.Flow
 
 /**
- * §4.8：业务层依赖的最小接口集合。ViewModel 不直接依赖具体实现，
+ * 业务层依赖的最小接口集合。ViewModel 不直接依赖具体实现，
  * 测试时可注入 fake 模拟"识别失败 / 保存失败 / 删除失败"等场景。
  *
- * 接口刻意保持窄，避免泄露 Room / ML Kit / 文件系统细节。
+ * §4.7：接口不暴露 Room Entity transform；状态迁移用 expected-state 语义，
+ * 返回 Boolean 表示是否成功（false = 状态冲突 / session 不存在）。
  */
 
 /** 正式车牌记录的读写。 */
@@ -22,34 +25,50 @@ interface PlateRecords {
 /** 车牌 OCR 引擎。 */
 interface RecognitionEngine {
     suspend fun recognize(uri: Uri): com.example.platerecognizer.ocr.Recognition?
+
+    /** §4.7：String 重载，供 ViewModel 内部与 JVM 测试使用（避开 Android Uri）。 */
+    suspend fun recognizeString(imageUriString: String): com.example.platerecognizer.ocr.Recognition? =
+        recognize(Uri.parse(imageUriString))
 }
 
 /** app 私有图片仓库：导入外部 URI、删除自有图片。 */
 interface ManagedImageStore {
     suspend fun importToLocal(source: Uri): Uri
     suspend fun deleteOwned(uri: Uri): Boolean
+
+    /** §4.7：String 重载，供 ViewModel 内部与 JVM 测试使用（避开 Android Uri）。 */
+    suspend fun importToLocalString(sourceUriString: String): String =
+        importToLocal(Uri.parse(sourceUriString)).toString()
+    suspend fun deleteOwnedString(imageUriString: String): Boolean =
+        deleteOwned(Uri.parse(imageUriString))
 }
 
-/** 识别 session 状态机持久化。 */
+/**
+ * 识别 session 状态机持久化。
+ *
+ * 所有迁移方法返回 Boolean：true 表示状态匹配并完成迁移；
+ * false 表示状态冲突（已被并发改动）或 session 不存在，调用方应放弃当前操作。
+ */
 interface RecognitionSessions {
-    fun observeActive(): Flow<com.example.platerecognizer.data.ActiveSession?>
-    suspend fun createCapturing(imageUri: String): com.example.platerecognizer.data.ActiveSession
-    suspend fun transition(
-        id: String,
-        state: com.example.platerecognizer.data.SessionState,
-        transform: (com.example.platerecognizer.data.RecognitionSessionEntity) -> com.example.platerecognizer.data.RecognitionSessionEntity =
-            { it },
-    )
-    suspend fun setRecognized(id: String, candidate: String, qualityScore: Float, error: String?)
-    suspend fun markAwaiting(id: String, error: String?)
-    suspend fun markSaved(id: String)
-    suspend fun markDiscarded(id: String)
-    suspend fun markFailed(id: String, error: String?)
+    fun observeActive(): Flow<ActiveSession?>
+    suspend fun createCapturing(imageUri: String): ActiveSession
+    suspend fun beginRecognizing(id: String): Boolean
+    suspend fun setRecognized(id: String, candidate: String, qualityScore: Float, error: String?): Boolean
+    suspend fun beginSaving(id: String): Boolean
+    suspend fun revertToAwaiting(id: String, error: String?): Boolean
+    suspend fun markSaved(id: String): Boolean
+    suspend fun beginDiscarding(id: String): Boolean
+    suspend fun markDiscarded(id: String): Boolean
+    suspend fun markFailed(id: String, error: String?): Boolean
     suspend fun delete(id: String)
     suspend fun listActiveImageUris(): List<String>
+    suspend fun listAllNonTerminal(): List<ActiveSession>
+
+    /** 当前活跃 session 的同步快照（用于恢复决策）。 */
+    suspend fun snapshotActive(): ActiveSession?
 }
 
-/** CSV 导出。从 PlateRepository 拆出（§4.8/§4.9）。 */
+/** CSV 导出。 */
 interface CsvExporter {
     suspend fun exportCsv(): Pair<Int, String>
 }

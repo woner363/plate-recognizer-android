@@ -57,6 +57,9 @@ android {
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get() }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    // §4.6：允许 JVM 单测调用 Android stub（如 Uri）时返回默认值而非抛异常。
+    // 彻底去 Uri 依赖见 §4.7（domain 接口用 String）。
+    testOptions { unitTests { isReturnDefaultValues = true } }
 
     // Room schema JSON 入 git，供未来 Migration / MigrationTestHelper 使用。
     sourceSets {
