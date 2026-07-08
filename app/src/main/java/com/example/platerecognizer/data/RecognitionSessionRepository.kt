@@ -100,7 +100,7 @@ class RecognitionSessionRepository(
     ) == 1
 
     override suspend fun markFailed(id: String, error: String?): Boolean {
-        // 任意非终态 → FAILED；用逐个尝试常见 expected state 的方式（简单但够用）
+        // 任意非终态 → FAILED；同时持久化 error，供 UI 恢复面板展示具体原因。
         for (expected in listOf(
             SessionState.CAPTURING,
             SessionState.RECOGNIZING,
@@ -108,10 +108,18 @@ class RecognitionSessionRepository(
             SessionState.SAVING,
             SessionState.DISCARDING,
         )) {
-            if (dao.transitionIf(id, expected, SessionState.FAILED, now()) == 1) return true
+            if (dao.markFailedIf(id, expected, SessionState.FAILED, error, now()) == 1) return true
         }
         return false
     }
+
+    /** FAILED → DISCARDING。用户显式清理失败任务时的 CAS。 */
+    override suspend fun beginClearingFailed(id: String): Boolean = dao.transitionIf(
+        id,
+        expectedState = SessionState.FAILED,
+        nextState = SessionState.DISCARDING,
+        updatedAt = now(),
+    ) == 1
 
     override suspend fun delete(id: String) = dao.deleteById(id)
 

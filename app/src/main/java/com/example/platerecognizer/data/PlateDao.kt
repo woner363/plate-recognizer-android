@@ -147,6 +147,27 @@ interface RecognitionSessionDao {
     ): Int
 
     /**
+     * §4.12：带 expected state 的失败迁移，同时持久化失败原因。
+     * 之前 markFailed 只更新 state，error 参数会被丢弃，导致恢复后的失败任务不可诊断。
+     */
+    @Query(
+        """
+        UPDATE recognition_sessions
+        SET state = :nextState,
+            error = :error,
+            updated_at = :updatedAt
+        WHERE id = :id AND state = :expectedState
+        """,
+    )
+    suspend fun markFailedIf(
+        id: String,
+        expectedState: SessionState,
+        nextState: SessionState,
+        error: String?,
+        updatedAt: Long,
+    ): Int
+
+    /**
      * §4.5：创建新 session 前，把所有现存非终态 session 标记为 DISCARDED，
      * 保证任意时刻最多一个活跃 session。事务保证原子性。
      */

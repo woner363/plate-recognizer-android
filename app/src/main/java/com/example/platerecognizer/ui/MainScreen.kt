@@ -38,11 +38,15 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
     val isProcessing by vm.isProcessing.collectAsStateWithLifecycle()
     val uiState by vm.uiState.collectAsStateWithLifecycle()
 
-    // 派生：当前是否有待确认对话框（AwaitingConfirmation / Saving / Discarding）
+    // 派生：确认对话框只覆盖 AwaitingConfirmation / Saving。
+    // Discarding 是终结中的后台状态，只阻塞新识别，不再显示可误解的确认弹窗。
     val pendingSession = (uiState as? RecognitionUiState.AwaitingConfirmation)?.session
         ?: (uiState as? RecognitionUiState.Saving)?.session
-        ?: (uiState as? RecognitionUiState.Discarding)?.session
-    val isSaving = uiState is RecognitionUiState.Saving
+    val discardingSession = (uiState as? RecognitionUiState.Discarding)?.session
+    val failedState = uiState as? RecognitionUiState.Failed
+    val hasBlockingSession = pendingSession != null || discardingSession != null || failedState != null
+    val isTerminalizing = uiState is RecognitionUiState.Saving ||
+        uiState is RecognitionUiState.Discarding
 
     // 维持单一 ImageCapture 用例引用，供拍照按钮使用
     val imageCapture = remember { ImageCapture.Builder().build() }
@@ -89,7 +93,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
         ) {
             AppHeader(
                 isProcessing = isProcessing,
-                hasPending = pendingSession != null,
+                hasPending = hasBlockingSession,
                 modifier = Modifier.padding(top = 18.dp, bottom = 16.dp),
             )
 
@@ -102,7 +106,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
             )
 
             CaptureActions(
-                enabled = !isProcessing && pendingSession == null,
+                enabled = !isProcessing && !hasBlockingSession,
                 onCapture = { vm.capturePhotoThenRecognize { capturer.takePicture(PLATE_ROI) } },
                 onGallery = {
                     pickImage.launch(
@@ -113,6 +117,14 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
                 },
                 modifier = Modifier.padding(top = 14.dp),
             )
+
+            failedState?.let { failed ->
+                FailedSessionCard(
+                    message = failed.message,
+                    onClear = vm::clearFailed,
+                    modifier = Modifier.padding(top = 12.dp),
+                )
+            }
 
             RecordsHeader(
                 count = records.size,
@@ -149,7 +161,7 @@ fun MainScreen(vm: PlatesViewModel = viewModel(factory = PlatesViewModel.Factory
             initial = p.candidate ?: "",
             onDismiss = { vm.discardPending() },
             onConfirm = { plate, note -> vm.confirmPending(plate, note) },
-            dismissEnabled = !isSaving,
+            dismissEnabled = !isTerminalizing,
         )
     }
 

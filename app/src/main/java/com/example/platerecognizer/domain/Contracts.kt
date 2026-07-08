@@ -75,6 +75,7 @@ interface RecognitionSessions {
     suspend fun beginDiscarding(id: String): Boolean
     suspend fun markDiscarded(id: String): Boolean
     suspend fun markFailed(id: String, error: String?): Boolean
+    suspend fun beginClearingFailed(id: String): Boolean
     suspend fun delete(id: String)
     suspend fun listActiveImageUris(): List<String>
     suspend fun listAllNonTerminal(): List<ActiveSession>
