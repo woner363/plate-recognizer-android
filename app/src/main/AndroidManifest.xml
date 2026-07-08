@@ -23,6 +23,9 @@
              不需要 com.google.mlkit.vision.DEPENDENCIES meta-data；那条 meta-data
              仅适用于通过 Play Services 拉取模型的 unbundled 依赖。 -->
 
+        <!-- §P3-5：锁竖屏是产品决策。取景框 ROI 按 4:3 竖屏 PreviewView 映射，
+             横屏会让 ROI 与图像方向失配。若后续要支持平板/折叠屏/横屏，
+             需重算 ROI 坐标并适配 CameraX ViewPort。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

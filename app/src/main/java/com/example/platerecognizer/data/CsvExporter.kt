@@ -22,8 +22,10 @@ class CsvExporter(
 
     override suspend fun exportCsv(): Pair<Int, String> = withContext(Dispatchers.IO) {
         val records = dao.listAll()
+        // §P3-2：文件名加短 UUID，避免同一秒内连续导出覆盖
+        val uid = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-        val filename = "plates_$ts.csv"
+        val filename = "plates_${ts}_$uid.csv"
         val csv = buildCsvInternal(records)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -42,7 +44,11 @@ class CsvExporter(
                 } ?: error("无法写入文件")
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                resolver.update(uri, values, null, null)
+                // §P3-2：检查 update 返回值，为 0 说明解除 pending 失败，文件对其他应用不可见
+                val updated = resolver.update(uri, values, null, null)
+                if (updated == 0) {
+                    error("MediaStore 解除 IS_PENDING 失败，文件可能不可见")
+                }
             } catch (e: Throwable) {
                 runCatching { resolver.delete(uri, null, null) }
                 throw e
@@ -51,7 +57,19 @@ class CsvExporter(
             @Suppress("DEPRECATION")
             val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             downloads.mkdirs()
-            java.io.File(downloads, filename).writeText(csv, Charsets.UTF_8)
+            // §P3-2：pre-Q 用 .tmp + 原子 rename，失败不留半截文件
+            val target = java.io.File(downloads, filename)
+            val tmp = java.io.File(downloads, "$filename.tmp")
+            try {
+                tmp.writeText(csv, Charsets.UTF_8)
+                if (!tmp.renameTo(target)) {
+                    tmp.copyTo(target, overwrite = true)
+                    tmp.delete()
+                }
+            } catch (e: Throwable) {
+                tmp.delete()
+                throw e
+            }
         }
         records.size to filename
     }

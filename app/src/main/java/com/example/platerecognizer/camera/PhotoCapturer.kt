@@ -12,9 +12,6 @@ import androidx.camera.core.ImageCaptureException
 import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -67,9 +64,9 @@ class PhotoCapturer(
      */
     private suspend fun captureRaw(): File = suspendCancellableCoroutine { cont ->
         val outputDir = File(context.filesDir, "plates").apply { mkdirs() }
-        val name = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault())
-            .format(Date()) + ".jpg"
-        val rawFile = File(outputDir, name)
+        // §P3-3：UUID 命名，避免毫秒时间戳在批量拍摄/多窗口场景碰撞
+        val uid = java.util.UUID.randomUUID().toString().replace("-", "").take(16)
+        val rawFile = File(outputDir, "captured_$uid.jpg")
         val output = ImageCapture.OutputFileOptions.Builder(rawFile).build()
         val completed = AtomicBoolean(false)
         cont.invokeOnCancellation {
