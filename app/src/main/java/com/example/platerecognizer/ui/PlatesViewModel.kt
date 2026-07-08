@@ -41,7 +41,7 @@ sealed interface UiEvent {
  *
  * Ready → Capturing/Recognizing → AwaitingConfirmation → Saving → Ready
  *                                              → Discarding → Ready
- *                                              → Failed → AwaitingConfirmation（可重试）
+ *                                              → Failed → Discarding → Ready
  */
 sealed interface RecognitionUiState {
     data object Ready : RecognitionUiState
@@ -50,7 +50,11 @@ sealed interface RecognitionUiState {
     data class AwaitingConfirmation(val session: ActiveSession) : RecognitionUiState
     data class Saving(val session: ActiveSession) : RecognitionUiState
     data class Discarding(val session: ActiveSession) : RecognitionUiState
-    data class Failed(val message: String, val recoverable: Boolean) : RecognitionUiState
+    data class Failed(
+        val session: ActiveSession,
+        val message: String,
+        val recoverable: Boolean,
+    ) : RecognitionUiState
 }
 
 class PlatesViewModel(
@@ -245,17 +249,22 @@ class PlatesViewModel(
         val candidate = result?.plateNo ?: ""
         val quality = result?.qualityScore ?: 0f
         val err = if (result == null) "未检测到车牌" else PlateValidator.describeError(candidate)
-        sessions.setRecognized(session.id, candidate, quality, err)
+        val updated = sessions.setRecognized(session.id, candidate, quality, err)
+        if (!updated) {
+            runCatching { sessions.markFailed(session.id, "识别结果写入失败，请重试") }
+            emit(UiEvent.Toast("识别结果写入失败，请重试"))
+        }
         // Room Flow 会自动把 UI 更新到 AwaitingConfirmation
     }
 
-    /**
-     * 串行入口：状态机非 Ready/Failed 时拒绝新识别。
-     */
+    /** 串行入口：只有 Ready 时允许新识别；失败任务必须先显式清理，避免旧图片泄漏。 */
     private inline fun launchRecognition(crossinline block: suspend () -> Unit) {
-        when (val s = uiState.value) {
+        when (uiState.value) {
             RecognitionUiState.Ready -> Unit
-            is RecognitionUiState.Failed -> Unit
+            is RecognitionUiState.Failed -> {
+                emit(UiEvent.Toast("请先清除上次失败的识别任务"))
+                return
+            }
             else -> {
                 emit(UiEvent.Toast("请先处理待确认的识别结果"))
                 return
@@ -338,8 +347,35 @@ class PlatesViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                sessions.revertToAwaiting(session.id, null)
+                sessions.markFailed(session.id, "放弃失败: ${e.message ?: "未知错误"}")
                 emit(UiEvent.Toast("放弃失败: ${e.message ?: "未知错误"}"))
+            }
+        }
+    }
+
+    /** 清理 FAILED session：删除失败任务的私有图片，并把 session 终结。 */
+    fun clearFailed() {
+        val current = uiState.value
+        val session = (current as? RecognitionUiState.Failed)?.session ?: return
+        viewModelScope.launch {
+            if (!sessions.beginClearingFailed(session.id)) {
+                emit(UiEvent.Toast("失败任务状态已变化，请稍后再试"))
+                return@launch
+            }
+            try {
+                runCatching { imageStore.deleteOwnedString(session.imageUri) }
+                if (sessions.markDiscarded(session.id)) {
+                    sessions.delete(session.id)
+                    emit(UiEvent.Toast("已清除失败任务"))
+                } else {
+                    sessions.markFailed(session.id, "清除失败任务时状态异常")
+                    emit(UiEvent.Toast("清除失败，请重试"))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                sessions.markFailed(session.id, "清除失败: ${e.message ?: "未知错误"}")
+                emit(UiEvent.Toast("清除失败: ${e.message ?: "未知错误"}"))
             }
         }
     }
@@ -406,7 +442,11 @@ class PlatesViewModel(
         session.state == SessionState.SAVING -> RecognitionUiState.Saving(session)
         session.state == SessionState.DISCARDING -> RecognitionUiState.Discarding(session)
         session.state == SessionState.FAILED ->
-            RecognitionUiState.Failed(session.error ?: "识别任务失败", recoverable = true)
+            RecognitionUiState.Failed(
+                session = session,
+                message = session.error ?: "识别任务失败",
+                recoverable = true,
+            )
         // SAVED / DISCARDED 终态：理论上已被 delete，兜底显示 Ready
         else -> RecognitionUiState.Ready
     }

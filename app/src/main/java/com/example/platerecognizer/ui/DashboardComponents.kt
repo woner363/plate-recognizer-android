@@ -143,6 +143,41 @@ internal fun CaptureActions(
 }
 
 @Composable
+internal fun FailedSessionCard(
+    message: String,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text(
+                text = "上次识别未完成",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(5.dp))
+            Text(
+                text = "$message。清除后即可重新拍照或从相册识别。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Spacer(Modifier.height(10.dp))
+            FilledTonalButton(
+                onClick = onClear,
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                Text("清除本次任务")
+            }
+        }
+    }
+}
+
+@Composable
 internal fun RecordsHeader(
     count: Int,
     exportEnabled: Boolean,

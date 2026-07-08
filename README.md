@@ -74,7 +74,7 @@ app/src/main/java/com/example/platerecognizer/
 cd plate-recognizer-android
 ./gradlew :app:assembleDebug          # 输出 app/build/outputs/apk/debug/app-debug.apk
 ./gradlew :app:installDebug           # 安装到已连接的设备
-./gradlew :app:test                   # 运行 JVM 单元测试（44 个）
+./gradlew :app:test                   # 运行 JVM 单元测试（47 个）
 ```
 
 > 首次构建会从 Maven Central / Google 仓库下载依赖，需要网络。
@@ -100,4 +100,4 @@ cd plate-recognizer-android
 - ✅ **Repository Pattern + 接口隔离**：domain 层最小接口，ViewModel 依赖抽象，便于 fake 测试
 - ✅ **业务边界强制校验**：Repository.add/confirmSession/applyCorrection 都调 PlateValidator.isValid
 - ✅ **显式错误处理**：所有 OCR / IO / DB 调用均 try-catch 且重抛 CancellationException，UI 用 Toast 反馈
-- ✅ **测试**：44 个 JVM 测试覆盖校验器 / OCR 候选 / CSV 编码 / 孤儿清理 / ViewModel 状态机
+- ✅ **测试**：47 个 JVM 测试覆盖校验器 / OCR 候选 / CSV 编码 / 孤儿清理 / ViewModel 状态机

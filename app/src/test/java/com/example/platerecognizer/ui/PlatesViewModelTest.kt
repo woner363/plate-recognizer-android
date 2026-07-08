@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -44,7 +43,6 @@ class PlatesViewModelTest {
 
     @Test fun failure_in_capture_resets_to_Ready_not_stuck_in_Capturing() = runTest(dispatcher) {
         val vm = newViewModel()
-        activateStateCollection(vm)
         vm.capturePhotoThenRecognize { throw RuntimeException("相机被占用") }
         assertTrue(
             "期望 Ready，实际 ${vm.uiState.value}",
@@ -55,7 +53,6 @@ class PlatesViewModelTest {
     @Test fun failure_in_import_resets_to_Ready() = runTest(dispatcher) {
         val imageStore = FakeImageStore(shouldFailImport = true)
         val vm = newViewModel(imageStore = imageStore)
-        activateStateCollection(vm)
         vm.onImagePickedUri("content://media/external/123")
         assertTrue(
             "导入失败后应回 Ready，实际 ${vm.uiState.value}",
@@ -67,7 +64,6 @@ class PlatesViewModelTest {
         val recognizer = FakeRecognizer(Recognition("京A12345", 0.9f))
         val sessions = FakeSessions()
         val vm = newViewModel(recognizer = recognizer, sessions = sessions)
-        activateStateCollection(vm)
         vm.onImageCapturedUri("file:///tmp/test.jpg")
 
         val state = vm.uiState.value
@@ -79,7 +75,6 @@ class PlatesViewModelTest {
         val recognizer = FakeRecognizer(Recognition("京A12345", 0.9f))
         val records = FakeRecords()
         val vm = newViewModel(recognizer = recognizer, records = records)
-        activateStateCollection(vm)
         vm.onImageCapturedUri("file:///tmp/test.jpg")
 
         // 连续两次确认
@@ -93,7 +88,6 @@ class PlatesViewModelTest {
         val recognizer = FakeRecognizer(Recognition("京A12345", 0.9f))
         val records = FakeRecords()
         val vm = newViewModel(recognizer = recognizer, records = records)
-        activateStateCollection(vm)
         vm.onImageCapturedUri("file:///tmp/test.jpg")
 
         vm.confirmPending("京AI2345", null)  // 序号位含 I
@@ -101,9 +95,44 @@ class PlatesViewModelTest {
         assertEquals("非法车牌不应入库", 0, records.added.size)
     }
 
-    /** 激活 uiState 上游（WhileSubscribed 需要订阅者）。 */
-    private fun activateStateCollection(vm: PlatesViewModel) {
-        kotlinx.coroutines.GlobalScope.launch(dispatcher) { vm.uiState.collect {} }
+    @Test fun startup_recognizing_session_becomes_Failed_with_error() = runTest(dispatcher) {
+        val sessions = FakeSessions(
+            initial = activeSession(SessionState.RECOGNIZING, error = null),
+        )
+        val vm = newViewModel(sessions = sessions)
+
+        val state = vm.uiState.value
+        assertTrue("期望 Failed，实际 $state", state is RecognitionUiState.Failed)
+        assertEquals("上次识别未完成", (state as RecognitionUiState.Failed).message)
+    }
+
+    @Test fun failed_setRecognized_marks_Failed_not_stuck_in_Recognizing() = runTest(dispatcher) {
+        val recognizer = FakeRecognizer(Recognition("京A12345", 0.9f))
+        val sessions = FakeSessions(failSetRecognized = true)
+        val vm = newViewModel(recognizer = recognizer, sessions = sessions)
+
+        vm.onImageCapturedUri("file:///tmp/test.jpg")
+
+        val state = vm.uiState.value
+        assertTrue("期望 Failed，实际 $state", state is RecognitionUiState.Failed)
+        assertEquals("识别结果写入失败，请重试", (state as RecognitionUiState.Failed).message)
+    }
+
+    @Test fun clear_failed_deletes_image_and_returns_Ready() = runTest(dispatcher) {
+        val imageStore = FakeImageStore()
+        val sessions = FakeSessions(
+            initial = activeSession(
+                state = SessionState.FAILED,
+                imageUri = "file:///tmp/failed.jpg",
+                error = "上次识别未完成",
+            ),
+        )
+        val vm = newViewModel(imageStore = imageStore, sessions = sessions)
+
+        vm.clearFailed()
+
+        assertTrue("清理失败任务后应回 Ready，实际 ${vm.uiState.value}", vm.uiState.value is RecognitionUiState.Ready)
+        assertEquals(listOf("file:///tmp/failed.jpg"), imageStore.deleted)
     }
 
     // ===== fakes =====
@@ -122,13 +151,17 @@ class PlatesViewModelTest {
     }
 
     private class FakeImageStore(val shouldFailImport: Boolean = false) : ManagedImageStore {
+        val deleted = mutableListOf<String>()
         override suspend fun importToLocal(source: Uri): Uri = Uri.parse("file:///tmp/imported.jpg")
         override suspend fun deleteOwned(uri: Uri): Boolean = true
         override suspend fun importToLocalString(sourceUriString: String): String {
             if (shouldFailImport) error("导入失败")
             return "file:///tmp/imported.jpg"
         }
-        override suspend fun deleteOwnedString(imageUriString: String): Boolean = true
+        override suspend fun deleteOwnedString(imageUriString: String): Boolean {
+            deleted += imageUriString
+            return true
+        }
     }
 
     private class FakeRecords : PlateRecords {
@@ -163,10 +196,29 @@ class PlatesViewModelTest {
         override suspend fun exportCsv(): Pair<Int, String> = 0 to "fake.csv"
     }
 
+    private fun activeSession(
+        state: SessionState,
+        imageUri: String = "file:///tmp/test.jpg",
+        candidate: String? = null,
+        qualityScore: Float? = null,
+        error: String? = null,
+    ) = ActiveSession(
+        id = UUID.randomUUID().toString(),
+        state = state,
+        candidate = candidate,
+        qualityScore = qualityScore,
+        imageUri = imageUri,
+        error = error,
+        createdAt = System.currentTimeMillis(),
+    )
+
     /** 内存 session 状态机 fake，模拟 expected-state 语义。 */
-    private class FakeSessions : RecognitionSessions {
-        private var active: ActiveSession? = null
-        private val flow = MutableStateFlow<ActiveSession?>(null)
+    private class FakeSessions(
+        initial: ActiveSession? = null,
+        private val failSetRecognized: Boolean = false,
+    ) : RecognitionSessions {
+        private var active: ActiveSession? = initial
+        private val flow = MutableStateFlow<ActiveSession?>(initial)
 
         override fun observeActive(): Flow<ActiveSession?> = flow
         override suspend fun createCapturing(imageUri: String): ActiveSession {
@@ -185,6 +237,7 @@ class PlatesViewModelTest {
         }
         override suspend fun beginRecognizing(id: String): Boolean = transition(id, SessionState.CAPTURING, SessionState.RECOGNIZING)
         override suspend fun setRecognized(id: String, candidate: String, qualityScore: Float, error: String?): Boolean {
+            if (failSetRecognized) return false
             val cur = active ?: return false
             if (cur.state != SessionState.RECOGNIZING) return false
             active = cur.copy(state = SessionState.AWAITING_CONFIRMATION, candidate = candidate, qualityScore = qualityScore, error = error)
@@ -192,19 +245,34 @@ class PlatesViewModelTest {
             return true
         }
         override suspend fun beginSaving(id: String): Boolean = transition(id, SessionState.AWAITING_CONFIRMATION, SessionState.SAVING)
-        override suspend fun revertToAwaiting(id: String, error: String?): Boolean = transition(id, SessionState.SAVING, SessionState.AWAITING_CONFIRMATION)
+        override suspend fun revertToAwaiting(id: String, error: String?): Boolean {
+            val cur = active ?: return false
+            if (cur.id != id || cur.state != SessionState.SAVING) return false
+            active = cur.copy(state = SessionState.AWAITING_CONFIRMATION, error = error)
+            flow.value = active
+            return true
+        }
         override suspend fun markSaved(id: String): Boolean {
+            if (active?.id != id) return false
             active = null
             flow.value = null
             return true
         }
         override suspend fun beginDiscarding(id: String): Boolean = transition(id, SessionState.AWAITING_CONFIRMATION, SessionState.DISCARDING)
         override suspend fun markDiscarded(id: String): Boolean {
+            if (active?.id != id || active?.state != SessionState.DISCARDING) return false
             active = null
             flow.value = null
             return true
         }
-        override suspend fun markFailed(id: String, error: String?): Boolean = true
+        override suspend fun markFailed(id: String, error: String?): Boolean {
+            val cur = active ?: return false
+            if (cur.id != id || cur.state.isTerminal) return false
+            active = cur.copy(state = SessionState.FAILED, error = error)
+            flow.value = active
+            return true
+        }
+        override suspend fun beginClearingFailed(id: String): Boolean = transition(id, SessionState.FAILED, SessionState.DISCARDING)
         override suspend fun delete(id: String) { active = null; flow.value = null }
         override suspend fun listActiveImageUris(): List<String> = active?.let { listOf(it.imageUri) } ?: emptyList()
         override suspend fun listAllNonTerminal(): List<ActiveSession> = active?.let { listOf(it) } ?: emptyList()
